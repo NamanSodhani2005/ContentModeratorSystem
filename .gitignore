@@ -22,13 +22,15 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-*.md
 
 # Data files
 backend/data/*.csv
 backend/data/*.npy
 backend/data/*.txt
 backend/data/*.npz
+backend/data/**/*.csv
+backend/data/**/*.zip
+backend/data/jigsaw-toxic-comment-classification-challenge/
 
 # Model checkpoints
 backend/saved_models/
@@ -54,3 +56,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# AI tooling
+.claude/
+tmpclaude-*
+CLAUDE.md
