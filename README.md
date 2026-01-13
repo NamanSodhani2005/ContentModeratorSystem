@@ -31,7 +31,7 @@ A full-stack AI system demonstrating **responsible AI deployment** through Deep 
 content-moderation-rl/
 ├── backend/
 │   ├── data/
-│   │   ├── download.py              # Kaggle data fetching
+│   │   ├── train.csv                # Your dataset (not tracked)
 │   │   └── preprocess.py            # BERT embeddings generation
 │   ├── rl_training/
 │   │   ├── environment/
@@ -63,34 +63,20 @@ content-moderation-rl/
 
 - Python 3.8+
 - Node.js 16+
-- Kaggle API credentials
+- Dataset CSV at `backend/data/train.csv` (for training)
 
-### 1. Kaggle Setup
+### 1. Prepare Data
 
-Create a Kaggle account and get your API credentials:
+Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
+(`toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`).
 
-```bash
-# Download kaggle.json from https://www.kaggle.com/settings
-# Place it in the correct location:
-
-# Windows:
-mkdir %USERPROFILE%\.kaggle
-move kaggle.json %USERPROFILE%\.kaggle\
-
-# Linux/Mac:
-mkdir ~/.kaggle
-mv kaggle.json ~/.kaggle/
-chmod 600 ~/.kaggle/kaggle.json
-```
+If you already have `embeddings.npy` and `labels.npy`, you can skip preprocessing.
 
 ### 2. Backend Setup
 
 ```bash
 # Install Python dependencies
 pip install -r backend/requirements.txt
-
-# Download datasets (Jigsaw Toxic Comments)
-python backend/data/download.py
 
 # Preprocess data and generate embeddings (~30 minutes)
 python backend/data/preprocess.py
@@ -293,14 +279,14 @@ Final Statistics:
 pip install -r backend/requirements.txt
 ```
 
-### Data download fails
+### Data not found
 
-**Error**: `kaggle.errors.ApiException: Unauthorized`
+**Error**: `Error: backend/data/train.csv not found`
 
-**Solution**: Check Kaggle API credentials
+**Solution**: Place your dataset at `backend/data/train.csv` with a `comment_text` column
+and the toxicity label columns, then rerun preprocessing:
 ```bash
-# Verify kaggle.json exists and has correct format
-cat ~/.kaggle/kaggle.json
+python backend/data/preprocess.py
 ```
 
 ### Frontend can't connect to backend

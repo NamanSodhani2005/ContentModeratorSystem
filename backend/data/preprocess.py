@@ -18,7 +18,7 @@ def main():
     train_path = DATA_DIR / 'train.csv' # Path to CSV
 
     if not os.path.exists(train_path): # Check file exists
-        print(f"Error: {train_path} not found. Please run download.py first.")
+        print(f"Error: {train_path} not found. Please place your dataset there.")
         return
 
     # Load data

@@ -2,48 +2,23 @@
 
 Get up and running in 5 steps:
 
-## Step 1: Run Setup Script
+## Step 1: Install Dependencies
 
-**Windows:**
 ```bash
-setup.bat
+pip install -r backend/requirements.txt
+cd frontend
+npm install
+cd ..
 ```
 
-**Linux/Mac:**
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+## Step 2: Provide Training Data
 
-This installs all dependencies (Python + Node.js packages).
+Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
+(`toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`).
 
-## Step 2: Configure Kaggle API
-
-1. Go to https://www.kaggle.com/settings
-2. Click "Create New API Token"
-3. Download `kaggle.json`
-4. Place it in the correct location:
-
-**Windows:**
-```bash
-mkdir %USERPROFILE%\.kaggle
-move kaggle.json %USERPROFILE%\.kaggle\
-```
-
-**Linux/Mac:**
-```bash
-mkdir ~/.kaggle
-mv kaggle.json ~/.kaggle/
-chmod 600 ~/.kaggle/kaggle.json
-```
-
-## Step 3: Download & Preprocess Data
+## Step 3: Preprocess Data
 
 ```bash
-# Download Jigsaw datasets (~500 MB)
-python backend/data/download.py
-
-# Generate embeddings (~30 minutes)
 python backend/data/preprocess.py
 ```
 
@@ -90,8 +65,8 @@ Try these comments:
 ### Issue: `ModuleNotFoundError: No module named 'torch'`
 **Fix**: Run `pip install -r backend/requirements.txt`
 
-### Issue: `kaggle.errors.ApiException: Unauthorized`
-**Fix**: Check that `kaggle.json` is in the correct location with valid credentials
+### Issue: `Error: backend/data/train.csv not found`
+**Fix**: Place your dataset at `backend/data/train.csv` with required columns, then rerun preprocessing
 
 ### Issue: Frontend shows "Network Error"
 **Fix**: Ensure backend is running on port 8000
