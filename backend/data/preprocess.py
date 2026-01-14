@@ -34,9 +34,9 @@ def main():
 
     # Initialize DistilBERT
     print("Loading DistilBERT model...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased') # Load tokenizer
     model = DistilBertModel.from_pretrained('distilbert-base-uncased') # Load model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
     model.to(device) # Move to device
     model.eval() # Set evaluation mode
 

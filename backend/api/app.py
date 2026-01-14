@@ -4,6 +4,8 @@ FastAPI backend for content moderation system.
 
 import os # File operations
 import sys # System operations
+import json # JSON logging
+from datetime import datetime # Timestamping
 from pathlib import Path # Path utilities
 import torch # PyTorch framework
 import numpy as np # Array operations
@@ -36,6 +38,8 @@ agent = None # DQN agent
 tokenizer = None # BERT tokenizer
 embedder = None # BERT embedder
 detoxify_model = None # Toxicity model
+embedding_device = None # Device for embeddings
+feedback_count = 0 # Feedback counter
 
 # Action mappings
 ACTION_NAMES = { # Action ID to name
@@ -46,6 +50,8 @@ ACTION_NAMES = { # Action ID to name
     4: "perma_ban" # Permanent ban
 }
 
+ACTION_IDS = {v: k for k, v in ACTION_NAMES.items()} # Action name to ID
+
 ACTION_COLORS = { # Action colors
     "keep": "green", # Green for keep
     "warn": "yellow", # Yellow for warn
@@ -54,11 +60,11 @@ ACTION_COLORS = { # Action colors
     "perma_ban": "darkred" # Dark red for perma ban
 }
 
-# Rule-based perma-ban thresholds for egregious content (tune as needed)
-EGREGIOUS_THRESHOLDS = {
-    "threat": 0.80,
-    "severe_toxicity": 0.90,
-    "toxicity": 0.95
+FEEDBACK_REWARDS = { # Feedback reward mapping
+    "good": 1.0,
+    "bad": -1.0,
+    "too_harsh": -1.0,
+    "too_soft": -1.0
 }
 
 # Request/Response models
@@ -73,17 +79,25 @@ class ModerationResponse(BaseModel): # Response model
     alternative_actions: list # Other possible actions
     q_values: list # Q-values
 
+class FeedbackRequest(BaseModel): # Feedback request model
+    comment: str # Comment text
+    decision: str # Action taken
+    feedback: str # good | bad | too_harsh | too_soft
+
 @app.on_event("startup") # Startup event
 async def load_models(): # Load models
     """Load all models on startup."""
-    global agent, tokenizer, embedder, detoxify_model # Global models
+    global agent, tokenizer, embedder, detoxify_model, embedding_device # Global models
 
     print("Loading models...")
 
     # Load DistilBERT for embeddings
     print("  Loading DistilBERT...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
+    embedding_device = device # Store device
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased') # Load tokenizer
     embedder = DistilBertModel.from_pretrained('distilbert-base-uncased') # Load embedder
+    embedder.to(device) # Move to device
     embedder.eval() # Set eval mode
 
     # Load Detoxify for toxicity analysis
@@ -92,14 +106,14 @@ async def load_models(): # Load models
 
     # Load trained DQN agent
     print("  Loading DQN agent...")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' # Select device
+    agent_device = device.type # DQN device
     policy_network = PolicyNetwork() # Create policy network
     target_network = PolicyNetwork() # Create target network
 
     agent = DQNAgent( # Create agent
         policy_network=policy_network, # Policy network
         target_network=target_network, # Target network
-        device=device # Device
+        device=agent_device # Device
     )
 
     # Load checkpoint if available
@@ -121,11 +135,11 @@ def embed_comment(comment_text): # Embed comment
         truncation=True, # Truncate if long
         max_length=128, # Max 128 tokens
         padding='max_length' # Pad to max
-    )
+    ).to(embedding_device) # Move to device
 
     with torch.no_grad(): # No gradients
         outputs = embedder(**inputs) # Forward pass
-        embedding = outputs.last_hidden_state[:, 0, :].squeeze().numpy() # Get CLS token
+        embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy() # Get CLS token
 
     return embedding # Return embedding
 
@@ -166,8 +180,12 @@ def generate_explanation(comment, action, q_values, toxicity_scores, override_re
     reasoning_parts = [] # Reasoning list
 
     # Analyze toxicity
-    max_toxicity_type = max(toxicity_scores, key=toxicity_scores.get) # Find highest toxicity
-    max_toxicity_score = toxicity_scores[max_toxicity_type] # Get score
+    if not toxicity_scores: # No toxicity scores available
+        max_toxicity_type = "toxicity"
+        max_toxicity_score = 0.0
+    else:
+        max_toxicity_type = max(toxicity_scores, key=toxicity_scores.get) # Find highest toxicity
+        max_toxicity_score = toxicity_scores[max_toxicity_type] # Get score
 
     if max_toxicity_score > 0.7: # High toxicity
         reasoning_parts.append(f"High {max_toxicity_type} score ({max_toxicity_score:.2f})") # Add reasoning
@@ -203,14 +221,12 @@ def generate_explanation(comment, action, q_values, toxicity_scores, override_re
 
     return ". ".join(reasoning_parts) + "." # Join and return
 
-def check_egregious(toxicity_scores): # Check for egregious content
-    """Return (is_egregious, triggers) based on toxicity thresholds."""
-    triggers = [] # Trigger list
-    for key, threshold in EGREGIOUS_THRESHOLDS.items(): # Iterate thresholds
-        score = float(toxicity_scores.get(key, 0.0)) # Get score
-        if score >= threshold: # Check threshold
-            triggers.append(f"{key}={score:.2f}") # Record trigger
-    return len(triggers) > 0, triggers # Return result
+def log_feedback_entry(entry): # Log feedback to file
+    """Append feedback entry to JSONL log."""
+    log_path = Path('backend/data/feedback.jsonl') # Feedback log path
+    log_path.parent.mkdir(exist_ok=True) # Ensure directory
+    with open(log_path, 'a', encoding='utf-8') as handle: # Append mode
+        handle.write(json.dumps(entry) + "\n") # Write entry
 
 @app.get("/") # Root endpoint
 async def root(): # Health check
@@ -242,24 +258,17 @@ async def moderate_comment(request: ModerationRequest): # Moderate comment
         action, q_values, attention_weights = agent.select_action(state, eval_mode=True) # Get action
 
         # 4. Get toxicity breakdown
-        toxicity_scores = detoxify_model.predict(comment) # Get toxicity scores
+        toxicity_scores = detoxify_model.predict(comment) if detoxify_model else {} # Get toxicity scores
 
-        # 5. Apply egregious-content override
-        override_reason = None # Default override reason
-        is_egregious, triggers = check_egregious(toxicity_scores) # Check thresholds
-        if is_egregious: # Egregious content
-            action = 4 # Perma ban
-            override_reason = f"Safety override: egregious content ({', '.join(triggers)})" # Override note
+        # 5. Generate explanation
+        reasoning = generate_explanation(comment, action, q_values, toxicity_scores, None) # Generate reasoning
 
-        # 6. Generate explanation
-        reasoning = generate_explanation(comment, action, q_values, toxicity_scores, override_reason) # Generate reasoning
-
-        # 7. Calculate confidence (softmax over Q-values)
+        # 6. Calculate confidence (softmax over Q-values)
         q_exp = np.exp(q_values - np.max(q_values)) # Exp Q-values
         q_probs = q_exp / q_exp.sum() # Softmax probabilities
-        confidence = 0.99 if override_reason else float(q_probs[action]) # Confidence score
+        confidence = float(q_probs[action]) # Confidence score
 
-        # 8. Get alternative actions
+        # 7. Get alternative actions
         action_indices = np.argsort(q_values)[::-1] # Sort actions by Q
         alternative_actions = [ # Build alternatives list
             {
@@ -281,6 +290,74 @@ async def moderate_comment(request: ModerationRequest): # Moderate comment
 
     except Exception as e: # Handle errors
         raise HTTPException(status_code=500, detail=f"Moderation failed: {str(e)}") # Return error
+
+@app.post("/api/feedback") # Feedback endpoint
+async def submit_feedback(request: FeedbackRequest): # Handle feedback
+    """
+    Accept user feedback and update the DQN agent online.
+    """
+    global feedback_count # Feedback counter
+
+    try: # Try feedback update
+        if agent is None: # Agent missing
+            raise HTTPException(status_code=503, detail="Agent not loaded") # Error
+
+        comment = request.comment.strip() # Clean comment
+        decision = request.decision.strip().lower() # Normalize decision
+        feedback = request.feedback.strip().lower() # Normalize feedback
+
+        if not comment: # Empty comment
+            raise HTTPException(status_code=400, detail="Comment cannot be empty") # Error
+        if decision not in ACTION_IDS: # Invalid decision
+            raise HTTPException(status_code=400, detail="Invalid decision") # Error
+        if feedback not in FEEDBACK_REWARDS: # Invalid feedback
+            raise HTTPException(status_code=400, detail="Invalid feedback") # Error
+
+        # Build state for feedback update
+        comment_embedding = embed_comment(comment) # Embed comment
+        state = construct_state(comment_embedding) # Build state vector
+
+        # Reward based on feedback
+        action = ACTION_IDS[decision] # Action ID
+        reward = FEEDBACK_REWARDS[feedback] # Reward signal
+        next_state = state # Terminal transition
+        done = True # Terminal step
+
+        agent.replay_buffer.push(state, action, reward, next_state, done) # Store transition
+        loss = agent.train_step(batch_size=1) # Online update
+
+        # Soft hint for harsh/soft feedback (adjacent action)
+        if feedback in ["too_harsh", "too_soft"]: # Directional feedback
+            if feedback == "too_harsh": # Suggest softer action
+                suggested_action = max(0, action - 1) # One step softer
+            else: # too_soft
+                suggested_action = min(4, action + 1) # One step harsher
+            if suggested_action != action: # Only if different
+                agent.replay_buffer.push(state, suggested_action, 0.5, next_state, done) # Bonus signal
+                agent.train_step(batch_size=1) # Train on hint
+
+        feedback_count += 1 # Increment counter
+
+        if feedback_count % 20 == 0: # Periodic save
+            save_path = Path('backend/saved_models/dqn_final.pt') # Save path
+            save_path.parent.mkdir(exist_ok=True) # Ensure directory
+            agent.save(save_path) # Save updated model
+
+        log_feedback_entry({ # Log feedback
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "comment": comment,
+            "decision": decision,
+            "feedback": feedback,
+            "reward": reward
+        })
+
+        loss_value = float(loss) if loss is not None else None # Normalize loss
+        return {"status": "ok", "loss": loss_value} # Response
+
+    except HTTPException: # Pass through HTTP errors
+        raise
+    except Exception as e: # Handle errors
+        raise HTTPException(status_code=500, detail=f"Feedback failed: {str(e)}") # Return error
 
 @app.get("/api/metrics") # Metrics endpoint
 async def get_metrics(): # Get training metrics

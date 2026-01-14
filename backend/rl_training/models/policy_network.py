@@ -14,7 +14,7 @@ class AttentionLayer(nn.Module): # Attention layer class
         self.attention = nn.Sequential( # Attention network
             nn.Linear(input_dim, attention_dim), # First projection
             nn.Tanh(), # Nonlinearity
-            nn.Linear(attention_dim, 1) # Score projection
+            nn.Linear(attention_dim, input_dim) # Per-feature scores
         )
 
     def forward(self, x): # Forward pass
@@ -23,9 +23,10 @@ class AttentionLayer(nn.Module): # Attention layer class
             x: (batch_size, input_dim)
         Returns:
             attended: (batch_size, input_dim)
-            weights: (batch_size, 1) - attention scores
+            weights: (batch_size, input_dim) - attention weights
         """
-        weights = torch.softmax(self.attention(x), dim=-1) # Compute attention weights
+        scores = self.attention(x) # Compute attention scores
+        weights = torch.softmax(scores, dim=-1) # Normalize across features
         attended = x * weights # Apply attention
         return attended, weights # Return results
 
@@ -80,7 +81,7 @@ class PolicyNetwork(nn.Module): # Q-network class
             state: (batch_size, 783) - [comment(768), context(15)]
         Returns:
             q_values: (batch_size, 5)
-            attention_weights: (batch_size, 1) - for interpretability
+            attention_weights: (batch_size, 320) - per-feature weights
         """
         # Split state into components
         comment_embedding = state[:, :self.comment_dim] # Extract comment part

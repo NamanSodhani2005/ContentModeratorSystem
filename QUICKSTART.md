@@ -16,6 +16,8 @@ cd ..
 Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
 (`toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`).
 
+Preprocessing uses the base DistilBERT encoder (no fine-tuning).
+
 ## Step 3: Preprocess Data
 
 ```bash

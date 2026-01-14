@@ -72,6 +72,8 @@ Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicit
 
 If you already have `embeddings.npy` and `labels.npy`, you can skip preprocessing.
 
+Preprocessing uses the base DistilBERT encoder (no fine-tuning).
+
 ### 2. Backend Setup
 
 ```bash

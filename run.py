@@ -1,6 +1,6 @@
 """
-Main runner for Content Moderation System
-Handles preprocessing, training, and API serving
+Main runner for Content Moderation System.
+Handles preprocessing, training, and API serving.
 """
 
 import os # File operations
@@ -18,6 +18,7 @@ sys.path.append('backend') # Add backend to path
 from rl_training.environment.forum_env import ForumEnvironment # RL environment
 from rl_training.models.policy_network import PolicyNetwork # Q-network
 from rl_training.agents.dqn_agent import DQNAgent # DQN agent
+ 
 
 def preprocess_data(): # Preprocess data
     """Step 1: Generate embeddings from raw CSV"""
@@ -47,9 +48,9 @@ def preprocess_data(): # Preprocess data
 
     print(f"✓ Loaded {len(comments)} comments")
     print("\nLoading DistilBERT model...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased') # Load tokenizer
     model = DistilBertModel.from_pretrained('distilbert-base-uncased') # Load model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
     model.to(device) # Move to device
     model.eval() # Eval mode
     print(f"✓ Using device: {device}")
@@ -250,12 +251,12 @@ def main(): # Main function
 
     # Step 1: Preprocess
     if not preprocess_data(): # Run preprocessing
-        print("\n❌ Preprocessing failed!")
+        print("\nError: Preprocessing failed!")
         return
 
     # Step 2: Train
     if not train_model(): # Run training
-        print("\n❌ Training failed!")
+        print("\nError: Training failed!")
         return
 
     # Step 3: Run API
