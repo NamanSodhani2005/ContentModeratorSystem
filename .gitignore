@@ -28,8 +28,10 @@ backend/data/*.csv
 backend/data/*.npy
 backend/data/*.txt
 backend/data/*.npz
+backend/data/*.jsonl
 backend/data/**/*.csv
 backend/data/**/*.zip
+backend/data/**/*.jsonl
 backend/data/jigsaw-toxic-comment-classification-challenge/
 
 # Model checkpoints
