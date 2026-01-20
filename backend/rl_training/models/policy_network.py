@@ -36,12 +36,12 @@ class PolicyNetwork(nn.Module): # Q-network class
 
     Architecture:
     - Comment processor: 768 → 256
-    - Context processor: 15 → 64
+    - Context processor: 18 → 64
     - Attention layer for interpretability
     - Q-value heads: 320 → 5 actions
     """
 
-    def __init__(self, comment_dim=768, context_dim=15, hidden_dim=256, num_actions=5): # Initialize network
+    def __init__(self, comment_dim=768, context_dim=18, hidden_dim=256, num_actions=5): # Initialize network
         super().__init__() # Call parent constructor
 
         self.comment_dim = comment_dim # Comment embedding size
@@ -78,7 +78,7 @@ class PolicyNetwork(nn.Module): # Q-network class
     def forward(self, state): # Forward pass
         """
         Args:
-            state: (batch_size, 783) - [comment(768), context(15)]
+            state: (batch_size, 786) - [comment(768), context(18)]
         Returns:
             q_values: (batch_size, 5)
             attention_weights: (batch_size, 320) - per-feature weights

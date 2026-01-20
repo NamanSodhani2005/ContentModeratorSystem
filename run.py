@@ -18,7 +18,9 @@ sys.path.append('backend') # Add backend to path
 from rl_training.environment.forum_env import ForumEnvironment # RL environment
 from rl_training.models.policy_network import PolicyNetwork # Q-network
 from rl_training.agents.dqn_agent import DQNAgent # DQN agent
- 
+from rl_training.models.hate_speech_head import HateSpeechHead # Hate speech head
+
+HATE_HEAD_PATH = Path('backend/saved_models/hate_speech_head.pt')
 
 def preprocess_data(): # Preprocess data
     """Step 1: Generate embeddings from raw CSV"""
@@ -74,6 +76,27 @@ def preprocess_data(): # Preprocess data
     np.save(data_dir / 'embeddings.npy', embeddings) # Save embeddings
     np.save(data_dir / 'labels.npy', labels) # Save labels
 
+    if HATE_HEAD_PATH.exists():
+        print("Generating hate speech scores...")
+        hate_head = HateSpeechHead()
+        hate_head.load_state_dict(torch.load(HATE_HEAD_PATH, map_location=device))
+        hate_head.to(device)
+        hate_head.eval()
+
+        hate_scores = []
+        batch_size = 256
+        for idx in tqdm(range(0, len(embeddings), batch_size), desc="Hate scores"):
+            batch = embeddings[idx:idx + batch_size]
+            with torch.no_grad():
+                batch_tensor = torch.tensor(batch, dtype=torch.float32, device=device)
+                logits = hate_head(batch_tensor)
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()
+                hate_scores.append(probs)
+
+        hate_scores = np.vstack(hate_scores)
+        np.save(data_dir / 'hate_scores.npy', hate_scores)
+        print(f"  Hate scores: {hate_scores.shape}")
+
     print(f"\n✓ Preprocessing complete!")
     print(f"  Embeddings: {embeddings.shape}")
     print(f"  Toxicity rate: {labels[:, 0].mean():.2%}")
@@ -102,11 +125,13 @@ def train_model(): # Train DQN model
     print("Loading data...")
     embeddings = np.load(embeddings_path) # Load embeddings
     labels = np.load(labels_path) # Load labels
+    hate_scores_path = 'backend/data/hate_scores.npy' # Hate scores path
+    hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
     print(f"✓ Loaded {len(embeddings)} comments")
 
     # Initialize environment
     print("\nInitializing environment...")
-    env = ForumEnvironment(embeddings, labels, max_steps=500) # Create env
+    env = ForumEnvironment(embeddings, labels, hate_scores=hate_scores, max_steps=500) # Create env
     print(f"✓ State space: {env.observation_space.shape}")
     print(f"✓ Action space: {env.action_space.n}")
 

@@ -18,6 +18,14 @@ Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicit
 
 Preprocessing uses the base DistilBERT encoder (no fine-tuning).
 
+Optional: train a hate/offensive/neither head using `backend/data/archive/labeled_data.csv`:
+
+```bash
+python backend/rl_training/train_hate_speech_head.py
+```
+
+If the head exists, preprocessing will also generate `backend/data/hate_scores.npy`.
+
 ## Step 3: Preprocess Data
 
 ```bash
@@ -27,16 +35,17 @@ python backend/data/preprocess.py
 ## Step 4: Train the Model
 
 ```bash
-# Train DQN agent (2-4 hours on CPU)
-python backend/rl_training/train.py
+# All-in-one training (hate head + embeddings + DQN)
+python backend/rl_training/train_all.py
+
+# Or train only the DQN agent
+# python backend/rl_training/train.py
 
 # Watch training progress:
-# Episode   10 | Reward:   45.23 | Loss: 0.1234 | ε: 0.950
-# Episode   20 | Reward:   67.89 | Loss: 0.0987 | ε: 0.903
+# Episode   10 | Reward:   45.23 | Loss: 0.1234 | Iae: 0.950
+# Episode   20 | Reward:   67.89 | Loss: 0.0987 | Iae: 0.903
 # ...
 ```
-
-**Optional**: Skip training by downloading pre-trained model (if available)
 
 ## Step 5: Run the Application
 

@@ -6,10 +6,18 @@ import numpy as np # Array operations
 import pandas as pd # Data manipulation
 from transformers import DistilBertTokenizer, DistilBertModel # BERT models
 import torch # PyTorch framework
+import sys # System operations
 from tqdm import tqdm # Progress bars
 from pathlib import Path # Path utilities
 
 DATA_DIR = Path(__file__).parent # Current directory path
+sys.path.append(str(DATA_DIR.parent)) # Add backend to path
+HATE_HEAD_PATH = DATA_DIR.parent / 'saved_models' / 'hate_speech_head.pt'
+
+try:
+    from rl_training.models.hate_speech_head import HateSpeechHead # Hate speech head
+except Exception:
+    HateSpeechHead = None
 
 def main():
     print("Starting data preprocessing...")
@@ -67,6 +75,7 @@ def main():
     output_path = DATA_DIR / 'embeddings.npy' # Embeddings output path
     labels_path = DATA_DIR / 'labels.npy' # Labels output path
     texts_path = DATA_DIR / 'comments.txt' # Text output path
+    hate_scores_path = DATA_DIR / 'hate_scores.npy' # Hate scores output path
 
     np.save(output_path, embeddings) # Save embeddings
     if labels is not None: # If labels exist
@@ -75,6 +84,28 @@ def main():
     with open(texts_path, 'w', encoding='utf-8') as f: # Open text file
         for comment in comments: # Loop through comments
             f.write(comment.replace('\n', ' ') + '\n') # Write one per line
+
+    if HateSpeechHead is not None and HATE_HEAD_PATH.exists():
+        print("Generating hate speech scores...")
+        hate_head = HateSpeechHead()
+        hate_head.load_state_dict(torch.load(HATE_HEAD_PATH, map_location=device))
+        hate_head.to(device)
+        hate_head.eval()
+
+        hate_scores = []
+        batch_size = 256
+        for idx in tqdm(range(0, len(embeddings), batch_size), desc="Hate scores"):
+            batch = embeddings[idx:idx + batch_size]
+            with torch.no_grad():
+                batch_tensor = torch.tensor(batch, dtype=torch.float32, device=device)
+                logits = hate_head(batch_tensor)
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()
+                hate_scores.append(probs)
+
+        hate_scores = np.vstack(hate_scores)
+        np.save(hate_scores_path, hate_scores)
+        print(f"  Hate scores shape: {hate_scores.shape}")
+        print(f"  Saved to: {hate_scores_path}")
 
     print(f"\n✓ Preprocessing complete!")
     print(f"  Embeddings shape: {embeddings.shape}")

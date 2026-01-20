@@ -20,6 +20,7 @@ sys.path.append(str(Path(__file__).parent.parent)) # Add parent to path
 
 from rl_training.models.policy_network import PolicyNetwork # Q-network
 from rl_training.agents.dqn_agent import DQNAgent # DQN agent
+from rl_training.models.hate_speech_head import HateSpeechHead # Hate speech head
 
 # Initialize FastAPI app
 app = FastAPI(title="Content Moderation API", version="1.0.0") # Create app
@@ -38,6 +39,7 @@ agent = None # DQN agent
 tokenizer = None # BERT tokenizer
 embedder = None # BERT embedder
 detoxify_model = None # Toxicity model
+hate_speech_head = None # Hate speech head
 embedding_device = None # Device for embeddings
 feedback_count = 0 # Feedback counter
 
@@ -87,7 +89,7 @@ class FeedbackRequest(BaseModel): # Feedback request model
 @app.on_event("startup") # Startup event
 async def load_models(): # Load models
     """Load all models on startup."""
-    global agent, tokenizer, embedder, detoxify_model, embedding_device # Global models
+    global agent, tokenizer, embedder, detoxify_model, embedding_device, hate_speech_head # Global models
 
     print("Loading models...")
 
@@ -99,6 +101,14 @@ async def load_models(): # Load models
     embedder = DistilBertModel.from_pretrained('distilbert-base-uncased') # Load embedder
     embedder.to(device) # Move to device
     embedder.eval() # Set eval mode
+
+    # Load hate speech head (optional)
+    hate_head_path = Path('backend/saved_models/hate_speech_head.pt')
+    if hate_head_path.exists():
+        hate_speech_head = HateSpeechHead()
+        hate_speech_head.load_state_dict(torch.load(hate_head_path, map_location=device))
+        hate_speech_head.to(device)
+        hate_speech_head.eval()
 
     # Load Detoxify for toxicity analysis
     print("  Loading Detoxify...")
@@ -146,7 +156,7 @@ def embed_comment(comment_text): # Embed comment
 def construct_state(comment_embedding): # Build state vector
     """
     Construct state vector from comment embedding.
-    [comment_embedding(768), user_history(10), platform_metrics(5)]
+    [comment_embedding(768), hate_scores(3), user_history(10), platform_metrics(5)]
     """
     # Mock user history (in production, fetch from database)
     user_history = np.array([ # User history
@@ -171,7 +181,15 @@ def construct_state(comment_embedding): # Build state vector
         0.5 # time_step_norm
     ])
 
-    state = np.concatenate([comment_embedding, user_history, platform_metrics]).astype(np.float32) # Concatenate all
+    hate_scores = np.zeros(3, dtype=np.float32)
+    if hate_speech_head is not None:
+        with torch.no_grad():
+            embed_tensor = torch.tensor(comment_embedding, dtype=torch.float32, device=embedding_device).unsqueeze(0)
+            logits = hate_speech_head(embed_tensor)
+            probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
+            hate_scores = probs.astype(np.float32)
+
+    state = np.concatenate([comment_embedding, hate_scores, user_history, platform_metrics]).astype(np.float32) # Concatenate all
     return state # Return state
 
 def generate_explanation(comment, action, q_values, toxicity_scores, override_reason=None): # Generate explanation

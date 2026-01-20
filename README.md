@@ -41,6 +41,7 @@ content-moderation-rl/
 │   │   ├── models/
 │   │   │   └── policy_network.py    # Attention-based Q-network
 │   │   └── train.py                 # Training loop
+│   │   └── train_all.py             # Full training pipeline
 │   ├── api/
 │   │   └── app.py                   # FastAPI server
 │   ├── saved_models/                # Trained checkpoints
@@ -74,6 +75,14 @@ If you already have `embeddings.npy` and `labels.npy`, you can skip preprocessin
 
 Preprocessing uses the base DistilBERT encoder (no fine-tuning).
 
+Optional: train a hate/offensive/neither head using `backend/data/archive/labeled_data.csv`:
+
+```bash
+python backend/rl_training/train_hate_speech_head.py
+```
+
+If the head exists, preprocessing will also generate `backend/data/hate_scores.npy` for RL training.
+
 ### 2. Backend Setup
 
 ```bash
@@ -86,14 +95,16 @@ python backend/data/preprocess.py
 
 ### 3. Train the Model
 
-```bash
-# Train DQN agent (2-4 hours on CPU)
-python backend/rl_training/train.py
+All-in-one training (hate head + embeddings + DQN):
 
-# This will:
-# - Train for 1000 episodes
-# - Save checkpoints every 100 episodes
-# - Save final model to backend/saved_models/dqn_final.pt
+```bash
+python backend/rl_training/train_all.py
+```
+
+Or train only the DQN agent (requires precomputed embeddings):
+
+```bash
+python backend/rl_training/train.py
 ```
 
 ### 4. Run Backend API
@@ -149,8 +160,9 @@ Try these examples:
 
 ### RL Environment
 
-**State Space** (783 dimensions):
+**State Space** (786 dimensions):
 - Comment embedding: 768 dims (DistilBERT)
+- Hate/offensive scores: 3 dims
 - User history: 10 dims (toxicity avg, warnings, bans, activity, etc.)
 - Platform metrics: 5 dims (health, satisfaction, false positive rate, etc.)
 
@@ -172,8 +184,8 @@ reward = toxicity_reduction
 ### Policy Network
 
 ```
-Input (783) → Comment Processor (768→256)
-            → Context Processor (15→64)
+Input (786) → Comment Processor (768→256)
+            → Context Processor (18→64)
             → Attention Layer
             → Q-Network → Q-values (5)
 ```

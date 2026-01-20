@@ -1,7 +1,7 @@
 """
 Gymnasium environment for content moderation.
 
-State: [768-dim comment embedding, 10-dim user history, 5-dim platform metrics]
+State: [768-dim comment embedding, 3-dim hate scores, 10-dim user history, 5-dim platform metrics]
 Actions: {0: keep, 1: warn, 2: remove, 3: temp_ban, 4: perma_ban}
 Reward: Multi-objective (toxicity reduction, false positives, user retention, fairness)
 """
@@ -25,24 +25,28 @@ class ForumEnvironment(gym.Env):
 
     metadata = {'render_modes': []} # No rendering
 
-    def __init__(self, embeddings, labels, max_steps=500): # Initialize environment
+    def __init__(self, embeddings, labels, hate_scores=None, max_steps=500): # Initialize environment
         """
         Args:
             embeddings: np.array of shape (N, 768) - DistilBERT embeddings
             labels: np.array of shape (N, 6) - toxicity labels
+            hate_scores: np.array of shape (N, 3) - hate/offensive/neither scores
             max_steps: Maximum steps per episode
         """
         super().__init__() # Call parent constructor
 
         self.embeddings = embeddings # Comment embeddings
         self.labels = labels # Toxicity labels
+        self.hate_scores = hate_scores # Hate speech scores
         self.max_steps = max_steps # Episode length
+        self.hate_score_dim = 3 # Hate speech score dims
 
-        # State: [comment_embedding(768), user_history(10), platform_metrics(5)]
+        # State: [comment_embedding(768), hate_scores(3), user_history(10), platform_metrics(5)]
+        self.state_dim = 768 + self.hate_score_dim + 10 + 5
         self.observation_space = spaces.Box( # Define state space
             low=-np.inf, # Minimum value
             high=np.inf, # Maximum value
-            shape=(783,), # 783-dimensional state
+            shape=(self.state_dim,), # State dimension
             dtype=np.float32 # Float32 precision
         )
 
@@ -89,6 +93,10 @@ class ForumEnvironment(gym.Env):
         self.current_idx = np.random.randint(0, len(self.embeddings)) # Random comment
         self.current_embedding = self.embeddings[self.current_idx] # Get embedding
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6) # Get toxicity
+        if self.hate_scores is not None:
+            self.current_hate_scores = self.hate_scores[self.current_idx]
+        else:
+            self.current_hate_scores = np.zeros(self.hate_score_dim, dtype=np.float32)
 
         state = self._get_state() # Build state vector
         return state, {} # Return state
@@ -106,6 +114,7 @@ class ForumEnvironment(gym.Env):
 
         state = np.concatenate([ # Combine all components
             self.current_embedding, # Comment embedding
+            self.current_hate_scores, # Hate speech scores
             self.user_history, # User history
             platform_metrics # Platform metrics
         ]).astype(np.float32) # Convert to float32
@@ -131,6 +140,10 @@ class ForumEnvironment(gym.Env):
         self.current_idx = np.random.randint(0, len(self.embeddings)) # Random next comment
         self.current_embedding = self.embeddings[self.current_idx] # Get embedding
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6) # Get toxicity
+        if self.hate_scores is not None:
+            self.current_hate_scores = self.hate_scores[self.current_idx]
+        else:
+            self.current_hate_scores = np.zeros(self.hate_score_dim, dtype=np.float32)
 
         # Check if episode is done
         done = self.current_step >= self.max_steps or self.platform_health <= 0.3 # Episode termination condition

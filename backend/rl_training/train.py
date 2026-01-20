@@ -19,6 +19,7 @@ from rl_training.agents.dqn_agent import DQNAgent # DQN agent
 def train( # Training function
     embeddings_path='backend/data/embeddings.npy', # Embeddings path
     labels_path='backend/data/labels.npy', # Labels path
+    hate_scores_path='backend/data/hate_scores.npy', # Hate scores path
     num_episodes=1000, # Training episodes
     max_steps=500, # Steps per episode
     batch_size=128, # Batch size
@@ -31,6 +32,7 @@ def train( # Training function
     Args:
         embeddings_path: Path to comment embeddings
         labels_path: Path to toxicity labels
+        hate_scores_path: Path to hate speech scores
         num_episodes: Number of training episodes
         max_steps: Steps per episode
         batch_size: Training batch size
@@ -45,13 +47,14 @@ def train( # Training function
     print(f"\nLoading data...")
     embeddings = np.load(embeddings_path) # Load embeddings
     labels = np.load(labels_path) # Load labels
+    hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
     print(f"✓ Loaded {len(embeddings)} comments")
     print(f"  Embedding shape: {embeddings.shape}")
     print(f"  Labels shape: {labels.shape}")
 
     # Initialize environment
     print(f"\nInitializing environment...")
-    env = ForumEnvironment(embeddings, labels, max_steps=max_steps) # Create environment
+    env = ForumEnvironment(embeddings, labels, hate_scores=hate_scores, max_steps=max_steps) # Create environment
     print(f"✓ Environment created")
     print(f"  State space: {env.observation_space.shape}")
     print(f"  Action space: {env.action_space.n}")
