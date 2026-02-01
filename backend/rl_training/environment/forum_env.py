@@ -1,237 +1,206 @@
 """
-Gymnasium environment for content moderation.
-
-State: [768-dim comment embedding, 3-dim hate scores, 10-dim user history, 5-dim platform metrics]
-Actions: {0: keep, 1: warn, 2: remove, 3: temp_ban, 4: perma_ban}
-Reward: Multi-objective (toxicity reduction, false positives, user retention, fairness)
+Moderation gym environment.
 """
 
-import numpy as np # Array operations
-import gymnasium as gym # RL environment framework
-from gymnasium import spaces # Space definitions
-from enum import IntEnum # Integer enumerations
+import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
+from enum import IntEnum
 
-class ModerationAction(IntEnum): # Action enumeration
-    KEEP = 0 # No action
-    WARN = 1 # Issue warning
-    REMOVE = 2 # Remove content
-    TEMP_BAN = 3 # Temporary ban
-    PERMA_BAN = 4 # Permanent ban
+
+class ModerationAction(IntEnum):
+    KEEP = 0
+    WARN = 1
+    REMOVE = 2
+    TEMP_BAN = 3
+    PERMA_BAN = 4
+
 
 class ForumEnvironment(gym.Env):
-    """
-    Content moderation RL environment simulating an online forum.
-    """
+    """Moderation environment."""
 
-    metadata = {'render_modes': []} # No rendering
+    metadata = {'render_modes': []}
 
-    def __init__(self, embeddings, labels, hate_scores=None, max_steps=500): # Initialize environment
-        """
-        Args:
-            embeddings: np.array of shape (N, 768) - DistilBERT embeddings
-            labels: np.array of shape (N, 6) - toxicity labels
-            hate_scores: np.array of shape (N, 3) - hate/offensive/neither scores
-            max_steps: Maximum steps per episode
-        """
-        super().__init__() # Call parent constructor
+    # Set up spaces, counters, and initial state for the moderation environment.
+    def __init__(self, embeddings, labels, hate_scores=None, target_features=None, target_toxicity=None, max_steps=500):
+        super().__init__()
 
-        self.embeddings = embeddings # Comment embeddings
-        self.labels = labels # Toxicity labels
-        self.hate_scores = hate_scores # Hate speech scores
-        self.max_steps = max_steps # Episode length
-        self.hate_score_dim = 3 # Hate speech score dims
+        self.embeddings = embeddings
+        self.labels = labels
+        self.hate_scores = hate_scores
+        self.target_features = target_features
+        self.target_toxicity = target_toxicity
+        self.max_steps = max_steps
+        self.hate_score_dim = 3
+        self.target_feature_dim = 4
 
-        # State: [comment_embedding(768), hate_scores(3), user_history(10), platform_metrics(5)]
-        self.state_dim = 768 + self.hate_score_dim + 10 + 5
-        self.observation_space = spaces.Box( # Define state space
-            low=-np.inf, # Minimum value
-            high=np.inf, # Maximum value
-            shape=(self.state_dim,), # State dimension
-            dtype=np.float32 # Float32 precision
+        self.state_dim = 768 + self.hate_score_dim + self.target_feature_dim + 10 + 5  # state size
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(self.state_dim,),
+            dtype=np.float32
         )
 
-        # Actions: 5 moderation decisions
-        self.action_space = spaces.Discrete(5) # 5 discrete actions
+        self.action_space = spaces.Discrete(5)
 
-        # Initialize state
-        self.current_step = 0 # Step counter
-        self.platform_health = 1.0 # Platform health metric
-        self.user_satisfaction = 1.0 # User satisfaction metric
-        self.false_positive_count = 0 # False positive counter
-        self.total_actions = 0 # Total actions taken
+        self.current_step = 0
+        self.platform_health = 1.0
+        self.user_satisfaction = 1.0
+        self.false_positive_count = 0
+        self.total_actions = 0
 
-        # User simulator state
-        self.user_history = np.zeros(10) # User history vector
+        self.user_history = np.zeros(10)
 
-        self.reset() # Reset environment
+        if self.target_toxicity is not None and len(self.target_toxicity) != len(self.embeddings):
+            raise ValueError("target_toxicity must have the same length as embeddings")
 
-    def reset(self, seed=None, options=None): # Reset environment
-        """Reset environment to initial state."""
-        super().reset(seed=seed) # Call parent reset
+        self.reset()
 
-        self.current_step = 0 # Reset step counter
-        self.platform_health = 1.0 # Reset platform health
-        self.user_satisfaction = 1.0 # Reset user satisfaction
-        self.false_positive_count = 0 # Reset FP counter
-        self.total_actions = 0 # Reset action counter
+    # Reset counters, sample a comment, and return the initial state.
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
 
-        # Reset user history
-        self.user_history = np.array([ # Initialize user history
-            0.2, # avg_toxicity
-            0.0, # warnings_received
-            0.0, # removals
-            0.0, # temp_bans
-            0.0, # perma_bans
-            1.0, # activity_level
-            0.8, # engagement_score
-            0.0, # appeal_count
-            10.0, # days_active
-            5.0 # posts_count
+        self.current_step = 0
+        self.platform_health = 1.0
+        self.user_satisfaction = 1.0
+        self.false_positive_count = 0
+        self.total_actions = 0
+
+        self.user_history = np.array([
+            0.2,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.8,
+            0.0,
+            10.0,
+            5.0
         ])
 
-        # Sample initial comment
-        self.current_idx = np.random.randint(0, len(self.embeddings)) # Random comment
-        self.current_embedding = self.embeddings[self.current_idx] # Get embedding
-        self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6) # Get toxicity
+        self.current_idx = np.random.randint(0, len(self.embeddings))  # sample comment
+        self.current_embedding = self.embeddings[self.current_idx]
+        self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
             self.current_hate_scores = self.hate_scores[self.current_idx]
         else:
             self.current_hate_scores = np.zeros(self.hate_score_dim, dtype=np.float32)
+        if self.target_features is not None:
+            self.current_target_features = self.target_features[self.current_idx]
+        else:
+            self.current_target_features = np.zeros(self.target_feature_dim, dtype=np.float32)
+        if self.target_toxicity is not None:
+            self.current_target_toxicity = float(self.target_toxicity[self.current_idx])
+        else:
+            self.current_target_toxicity = None
 
-        state = self._get_state() # Build state vector
-        return state, {} # Return state
+        state = self._get_state()
+        return state, {}
 
-    def _get_state(self): # Build state vector
-        """Construct state vector from current comment and context."""
-        # Platform metrics: [health, satisfaction, false_positive_rate, moderation_rate, time_step_norm]
-        platform_metrics = np.array([ # Calculate platform metrics
-            self.platform_health, # Current health
-            self.user_satisfaction, # Current satisfaction
-            self.false_positive_count / max(1, self.total_actions), # FP rate
-            self.total_actions / max(1, self.current_step), # Moderation rate
-            self.current_step / self.max_steps # Progress in episode
+    # Build the state vector from embeddings, context, and platform metrics.
+    def _get_state(self):
+        platform_metrics = np.array([
+            self.platform_health,
+            self.user_satisfaction,
+            self.false_positive_count / max(1, self.total_actions),
+            self.total_actions / max(1, self.current_step),
+            self.current_step / self.max_steps
         ])
 
-        state = np.concatenate([ # Combine all components
-            self.current_embedding, # Comment embedding
-            self.current_hate_scores, # Hate speech scores
-            self.user_history, # User history
-            platform_metrics # Platform metrics
-        ]).astype(np.float32) # Convert to float32
+        state = np.concatenate([
+            self.current_embedding,
+            self.current_hate_scores,
+            self.current_target_features,
+            self.user_history,
+            platform_metrics
+        ]).astype(np.float32)
 
-        return state # Return state vector
+        return state
 
-    def step(self, action): # Take environment step
-        """Execute moderation action and return next state, reward, done, info."""
-        self.current_step += 1 # Increment step counter
-        self.total_actions += 1 # Increment action counter
+    # Apply an action, compute reward, update state, and sample next comment.
+    def step(self, action):
+        self.current_step += 1
+        self.total_actions += 1
 
-        # Get toxicity of current comment
-        is_toxic = self.current_toxicity[0] > 0.5 # Binary toxicity threshold
-        toxicity_score = self.current_toxicity[0] # Toxicity score
+        if self.current_target_toxicity is not None:
+            toxicity_score = float(self.current_target_toxicity)
+        else:
+            toxicity_score = float(np.max(self.current_toxicity))
 
-        # Calculate reward components
-        reward = self._calculate_reward(action, toxicity_score, is_toxic) # Compute reward
+        reward = self._calculate_reward(action, toxicity_score)
+        self._update_state(action, toxicity_score)
 
-        # Update user history and platform state
-        self._update_state(action, is_toxic) # Update metrics
-
-        # Sample next comment
-        self.current_idx = np.random.randint(0, len(self.embeddings)) # Random next comment
-        self.current_embedding = self.embeddings[self.current_idx] # Get embedding
-        self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6) # Get toxicity
+        self.current_idx = np.random.randint(0, len(self.embeddings))  # sample comment
+        self.current_embedding = self.embeddings[self.current_idx]
+        self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
             self.current_hate_scores = self.hate_scores[self.current_idx]
         else:
             self.current_hate_scores = np.zeros(self.hate_score_dim, dtype=np.float32)
+        if self.target_features is not None:
+            self.current_target_features = self.target_features[self.current_idx]
+        else:
+            self.current_target_features = np.zeros(self.target_feature_dim, dtype=np.float32)
+        if self.target_toxicity is not None:
+            self.current_target_toxicity = float(self.target_toxicity[self.current_idx])
+        else:
+            self.current_target_toxicity = None
 
-        # Check if episode is done
-        done = self.current_step >= self.max_steps or self.platform_health <= 0.3 # Episode termination condition
+        done = self.current_step >= self.max_steps or self.platform_health <= 0.3  # episode end
 
-        state = self._get_state() # Build next state
-        info = { # Info dictionary
-            'platform_health': self.platform_health, # Current health
-            'user_satisfaction': self.user_satisfaction, # Current satisfaction
-            'false_positive_rate': self.false_positive_count / max(1, self.total_actions), # FP rate
-            'action_taken': ModerationAction(action).name # Action name
+        state = self._get_state()
+        info = {
+            'platform_health': self.platform_health,
+            'user_satisfaction': self.user_satisfaction,
+            'false_positive_rate': self.false_positive_count / max(1, self.total_actions),
+            'action_taken': ModerationAction(action).name
         }
 
-        return state, reward, done, False, info # Return step results
+        return state, reward, done, False, info
 
-    def _calculate_reward(self, action, toxicity_score, is_toxic): # Calculate reward
-        """
-        Multi-objective reward function.
+    # Compute continuous alignment reward based on toxicity score and action severity.
+    def _calculate_reward(self, action, toxicity_score):
+        action_severity = action / 4.0
+        alignment = 1.0 - abs(toxicity_score - action_severity)
+        over_penalty = 0.5 * max(0.0, action_severity - toxicity_score)
+        reward = alignment - over_penalty
 
-        Components:
-        1. Toxicity reduction: Reward removing actual toxic content
-        2. False positive penalty: Penalize over-moderation
-        3. User retention: Penalize harsh actions on benign users
-        4. Platform health: Long-term community quality
-        """
-        reward = 0.0 # Initialize reward
+        reward += 0.1 * self.platform_health  # health bonus
 
-        action_severity = [0, 0.2, 0.5, 0.8, 1.0] # Action severity levels
+        return reward
 
-        if is_toxic: # Toxic content
-            # Correct detection: reward scales with action severity and toxicity
-            if action in [ModerationAction.WARN, ModerationAction.REMOVE, ModerationAction.TEMP_BAN]: # Appropriate actions
-                reward += 1.0 + toxicity_score # Reward correct moderation
-            elif action == ModerationAction.PERMA_BAN: # Perma ban
-                # Only reward perma-ban for very toxic content
-                reward += 2.0 if toxicity_score > 0.8 else -0.5 # Reward extreme toxicity only
-            else: # Keep action
-                # Missed toxic content
-                reward -= 1.5 * toxicity_score # Penalize missed toxicity
-        else: # Non-toxic content
-            # Non-toxic content
-            if action == ModerationAction.KEEP: # Keep action
-                reward += 0.5 # Small reward
-            else: # Moderation action
-                # False positive: penalize severity
-                self.false_positive_count += 1 # Increment FP counter
-                reward -= 1.0 * action_severity[action] # Penalize false positive
+    # Update user history and platform metrics based on action and toxicity.
+    def _update_state(self, action, toxicity_score):
+        if action == ModerationAction.WARN:
+            self.user_history[1] += 1
+        elif action == ModerationAction.REMOVE:
+            self.user_history[2] += 1
+        elif action == ModerationAction.TEMP_BAN:
+            self.user_history[3] += 1
+        elif action == ModerationAction.PERMA_BAN:
+            self.user_history[4] += 1
 
-        # Platform health bonus
-        reward += 0.1 * self.platform_health # Health bonus
+        action_severity = action / 4.0
+        if toxicity_score > 0.3 and action > ModerationAction.KEEP:
+            self.platform_health += 0.01
+        elif toxicity_score < 0.3 and action >= ModerationAction.TEMP_BAN:
+            self.platform_health -= 0.02
+            self.false_positive_count += 1
 
-        # User retention penalty for harsh actions
-        if action >= ModerationAction.TEMP_BAN: # Ban actions
-            reward -= 0.2 * self.user_satisfaction # User retention penalty
+        if abs(toxicity_score - action_severity) < 0.3:
+            self.user_satisfaction += 0.005
+        else:
+            self.user_satisfaction -= 0.01
 
-        return reward # Return total reward
+        self.platform_health = np.clip(self.platform_health, 0.0, 1.0)  # clamp health
+        self.user_satisfaction = np.clip(self.user_satisfaction, 0.0, 1.0)  # clamp satisfaction
 
-    def _update_state(self, action, is_toxic): # Update environment state
-        """Update platform metrics and user history based on action."""
-        # Update user history
-        if action == ModerationAction.WARN: # Warning action
-            self.user_history[1] += 1 # Increment warnings
-        elif action == ModerationAction.REMOVE: # Remove action
-            self.user_history[2] += 1 # Increment removals
-        elif action == ModerationAction.TEMP_BAN: # Temp ban
-            self.user_history[3] += 1 # Increment temp bans
-        elif action == ModerationAction.PERMA_BAN: # Perma ban
-            self.user_history[4] += 1 # Increment perma bans
+    # No rendering implemented for this environment.
+    def render(self):
+        pass
 
-        # Update platform health based on moderation quality
-        if is_toxic and action != ModerationAction.KEEP: # Good moderation
-            self.platform_health += 0.01 # Increase health
-        elif not is_toxic and action in [ModerationAction.TEMP_BAN, ModerationAction.PERMA_BAN]: # False positive
-            self.platform_health -= 0.02 # Decrease health
-
-        # Update user satisfaction
-        if action == ModerationAction.KEEP or (is_toxic and action in [ModerationAction.WARN, ModerationAction.REMOVE]): # Fair moderation
-            self.user_satisfaction += 0.005 # Increase satisfaction
-        else: # Harsh or unfair
-            self.user_satisfaction -= 0.01 # Decrease satisfaction
-
-        # Clamp values
-        self.platform_health = np.clip(self.platform_health, 0.0, 1.0) # Clamp health
-        self.user_satisfaction = np.clip(self.user_satisfaction, 0.0, 1.0) # Clamp satisfaction
-
-    def render(self): # Render environment
-        """Optional rendering (not implemented)."""
-        pass # No rendering
-
-    def close(self): # Close environment
-        """Cleanup."""
-        pass # No cleanup needed
+    # No cleanup needed for this environment.
+    def close(self):
+        pass

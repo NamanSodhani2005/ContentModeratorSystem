@@ -7,6 +7,10 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv/
+.venv*/
+.env
+.env.*
 build/
 develop-eggs/
 dist/
@@ -22,17 +26,34 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+htmlcov/
 
 # Data files
 backend/data/*.csv
+backend/data/*.json
 backend/data/*.npy
 backend/data/*.txt
 backend/data/*.npz
 backend/data/*.jsonl
+backend/data/**/*.npy
+backend/data/**/*.npz
+backend/data/**/*.txt
+backend/data/**/*.json
 backend/data/**/*.csv
 backend/data/**/*.zip
 backend/data/**/*.jsonl
+backend/data/archive/
+backend/data/archive2/
+backend/data/HateXplain/
+backend/data/Ethos-Hate-Speech-Dataset/
+backend/data/hatecheck-data/
 backend/data/jigsaw-toxic-comment-classification-challenge/
+backend/data/*.bak
 
 # Model checkpoints
 backend/saved_models/
@@ -57,9 +78,9 @@ frontend/build/
 Thumbs.db
 
 # Logs
-*.log
+*.logyy
 
-# AI tooling
-.claude/
-tmpclaude-*
-CLAUDE.md
+# Docs
+*.md
+!/README.md
+!/QUICKSTART.md

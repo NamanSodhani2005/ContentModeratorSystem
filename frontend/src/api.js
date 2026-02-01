@@ -18,3 +18,12 @@ export const getExamples = async () => { // Export examples function
   const response = await axios.get(`${API_BASE_URL}/api/examples`); // Fetch examples endpoint
   return response.data; // Return examples data
 };
+
+export const submitFeedback = async (comment, decision, feedback) => { // Export feedback function
+  const response = await axios.post(`${API_BASE_URL}/api/feedback`, { // Send feedback request
+    comment, // Original comment text
+    decision, // Decision string
+    feedback // Feedback label
+  });
+  return response.data; // Return response data
+};

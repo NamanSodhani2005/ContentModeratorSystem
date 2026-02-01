@@ -1,206 +1,201 @@
 """
-Training loop for content moderation DQN agent.
+DQN training loop.
 """
 
-import os # File operations
-import sys # System operations
-import numpy as np # Array operations
-import torch # PyTorch framework
-from pathlib import Path # Path utilities
-from tqdm import tqdm # Progress bars
+import os
+import sys
+import numpy as np
+import torch
+from pathlib import Path
+from tqdm import tqdm
 
-# Add parent directory to path
-sys.path.append(str(Path(__file__).parent.parent)) # Add parent to path
+sys.path.append(str(Path(__file__).parent.parent))
 
-from rl_training.environment.forum_env import ForumEnvironment # RL environment
-from rl_training.models.policy_network import PolicyNetwork # Q-network
-from rl_training.agents.dqn_agent import DQNAgent # DQN agent
+from rl_training.environment.forum_env import ForumEnvironment
+from rl_training.models.policy_network import PolicyNetwork
+from rl_training.agents.dqn_agent import DQNAgent
 
-def train( # Training function
-    embeddings_path='backend/data/embeddings.npy', # Embeddings path
-    labels_path='backend/data/labels.npy', # Labels path
-    hate_scores_path='backend/data/hate_scores.npy', # Hate scores path
-    num_episodes=1000, # Training episodes
-    max_steps=500, # Steps per episode
-    batch_size=128, # Batch size
-    save_interval=100, # Save interval
-    device='cpu' # Device
+
+# Run the DQN training loop over episodes, saving checkpoints and metrics.
+def train(
+    embeddings_path='backend/data/embeddings.npy',
+    labels_path='backend/data/labels.npy',
+    hate_scores_path='backend/data/hate_scores.npy',
+    target_features_path='backend/data/target_features.npy',
+    target_toxicity_path='backend/data/target_toxicity.npy',
+    num_episodes=1000,
+    max_steps=500,
+    batch_size=128,
+    save_interval=100,
+    device='cpu'
 ):
-    """
-    Train DQN agent on content moderation task.
-
-    Args:
-        embeddings_path: Path to comment embeddings
-        labels_path: Path to toxicity labels
-        hate_scores_path: Path to hate speech scores
-        num_episodes: Number of training episodes
-        max_steps: Steps per episode
-        batch_size: Training batch size
-        save_interval: Save checkpoint every N episodes
-        device: 'cpu' or 'cuda'
-    """
     print("=" * 60)
     print("Content Moderation RL Training")
     print("=" * 60)
 
-    # Load data
-    print(f"\nLoading data...")
-    embeddings = np.load(embeddings_path) # Load embeddings
-    labels = np.load(labels_path) # Load labels
+    print("\nLoading data...")
+    embeddings = np.load(embeddings_path)  # load embeddings
+    labels = np.load(labels_path)  # load labels
     hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
-    print(f"✓ Loaded {len(embeddings)} comments")
+    target_features = np.load(target_features_path) if os.path.exists(target_features_path) else None
+    target_toxicity = np.load(target_toxicity_path) if os.path.exists(target_toxicity_path) else None
+    print(f"Loaded {len(embeddings)} comments")
     print(f"  Embedding shape: {embeddings.shape}")
     print(f"  Labels shape: {labels.shape}")
+    if target_features is not None:
+        print(f"  Target features shape: {target_features.shape}")
+    if target_toxicity is not None:
+        print(f"  Target toxicity shape: {target_toxicity.shape}")
 
-    # Initialize environment
-    print(f"\nInitializing environment...")
-    env = ForumEnvironment(embeddings, labels, hate_scores=hate_scores, max_steps=max_steps) # Create environment
-    print(f"✓ Environment created")
+    print("\nInitializing environment...")
+    env = ForumEnvironment(
+        embeddings,
+        labels,
+        hate_scores=hate_scores,
+        target_features=target_features,
+        target_toxicity=target_toxicity,
+        max_steps=max_steps
+    )
+    print("Environment created")
     print(f"  State space: {env.observation_space.shape}")
     print(f"  Action space: {env.action_space.n}")
 
-    # Initialize networks
-    print(f"\nInitializing neural networks...")
-    policy_network = PolicyNetwork() # Policy network
-    target_network = PolicyNetwork() # Target network
-    print(f"✓ Networks created")
+    print("\nInitializing neural networks...")
+    policy_network = PolicyNetwork(context_dim=22)
+    target_network = PolicyNetwork(context_dim=22)
+    print("Networks created")
     print(f"  Parameters: {sum(p.numel() for p in policy_network.parameters()):,}")
 
-    # Initialize agent
-    print(f"\nInitializing DQN agent...")
-    agent = DQNAgent( # Create agent
-        policy_network=policy_network, # Policy network
-        target_network=target_network, # Target network
-        device=device, # Device
-        lr=1e-4, # Learning rate
-        gamma=0.99, # Discount factor
-        epsilon_start=1.0, # Initial epsilon
-        epsilon_end=0.05, # Final epsilon
-        epsilon_decay=0.995 # Epsilon decay
+    print("\nInitializing DQN agent...")
+    agent = DQNAgent(
+        policy_network=policy_network,
+        target_network=target_network,
+        device=device,
+        lr=1e-4,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_end=0.05,
+        epsilon_decay=0.995
     )
-    print(f"✓ Agent ready")
+    print("Agent ready")
 
-    # Training loop
     print(f"\n{'='*60}")
     print(f"Starting training for {num_episodes} episodes")
     print(f"{'='*60}\n")
 
-    training_stats = { # Statistics dictionary
-        'episode_rewards': [], # Reward per episode
-        'episode_lengths': [], # Steps per episode
-        'losses': [], # Loss per episode
-        'epsilon_values': [], # Epsilon per episode
-        'platform_health': [], # Health per episode
-        'false_positive_rates': [] # FP rate per episode
+    training_stats = {
+        'episode_rewards': [],
+        'episode_lengths': [],
+        'losses': [],
+        'epsilon_values': [],
+        'platform_health': [],
+        'false_positive_rates': []
     }
 
-    for episode in range(num_episodes): # Episode loop
-        state, _ = env.reset() # Reset environment
-        episode_reward = 0 # Cumulative reward
-        episode_loss = [] # Episode losses
+    interrupted = False
+    try:
+        for episode in range(num_episodes):
+            state, _ = env.reset()
+            episode_reward = 0
+            episode_loss = []
 
-        for step in range(max_steps): # Step loop
-            # Select action
-            action, q_values, attention = agent.select_action(state) # Select action
+            for step in range(max_steps):
+                action, q_values, attention = agent.select_action(state)
+                next_state, reward, done, truncated, info = env.step(action)
+                agent.replay_buffer.push(state, action, reward, next_state, done)
 
-            # Execute action
-            next_state, reward, done, truncated, info = env.step(action) # Take step
+                loss = agent.train_step(batch_size)
+                if loss is not None:
+                    episode_loss.append(loss)
 
-            # Store transition
-            agent.replay_buffer.push(state, action, reward, next_state, done) # Store experience
+                episode_reward += reward
+                state = next_state
 
-            # Train
-            loss = agent.train_step(batch_size) # Training step
-            if loss is not None: # If training occurred
-                episode_loss.append(loss) # Record loss
+                if done:
+                    break
 
-            episode_reward += reward # Accumulate reward
-            state = next_state # Update state
+            if episode % 10 == 0:
+                agent.update_target_network(tau=0.005)  # sync target
 
-            if done: # Episode done
-                break # Exit step loop
+            agent.decay_epsilon()
 
-        # Update target network
-        if episode % 10 == 0: # Every 10 episodes
-            agent.update_target_network(tau=0.005) # Soft update
+            training_stats['episode_rewards'].append(episode_reward)
+            training_stats['episode_lengths'].append(step + 1)
+            training_stats['losses'].append(np.mean(episode_loss) if episode_loss else 0)
+            training_stats['epsilon_values'].append(agent.epsilon)
+            training_stats['platform_health'].append(info['platform_health'])
+            training_stats['false_positive_rates'].append(info['false_positive_rate'])
 
-        # Decay epsilon
-        agent.decay_epsilon() # Decay exploration
+            if episode % 10 == 0:
+                avg_reward = np.mean(training_stats['episode_rewards'][-10:])
+                avg_loss = np.mean(training_stats['losses'][-10:])
+                print(f"Episode {episode:4d} | "
+                      f"Reward: {avg_reward:7.2f} | "
+                      f"Loss: {avg_loss:.4f} | "
+                      f"Eps: {agent.epsilon:.3f} | "
+                      f"Health: {info['platform_health']:.2f} | "
+                      f"FP: {info['false_positive_rate']:.3f}")
 
-        # Record statistics
-        training_stats['episode_rewards'].append(episode_reward) # Record reward
-        training_stats['episode_lengths'].append(step + 1) # Record length
-        training_stats['losses'].append(np.mean(episode_loss) if episode_loss else 0) # Record loss
-        training_stats['epsilon_values'].append(agent.epsilon) # Record epsilon
-        training_stats['platform_health'].append(info['platform_health']) # Record health
-        training_stats['false_positive_rates'].append(info['false_positive_rate']) # Record FP rate
+            if episode % save_interval == 0 and episode > 0:
+                save_dir = Path('backend/saved_models')
+                save_dir.mkdir(exist_ok=True)
+                save_path = save_dir / f'dqn_checkpoint_ep{episode}.pt'
+                agent.save(save_path)  # checkpoint
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nTraining interrupted by user. Saving current model and stats...")
 
-        # Print progress
-        if episode % 10 == 0: # Every 10 episodes
-            avg_reward = np.mean(training_stats['episode_rewards'][-10:]) # Average reward
-            avg_loss = np.mean(training_stats['losses'][-10:]) # Average loss
-            print(f"Episode {episode:4d} | " # Print stats
-                  f"Reward: {avg_reward:7.2f} | "
-                  f"Loss: {avg_loss:.4f} | "
-                  f"ε: {agent.epsilon:.3f} | "
-                  f"Health: {info['platform_health']:.2f} | "
-                  f"FP: {info['false_positive_rate']:.3f}")
-
-        # Save checkpoint
-        if episode % save_interval == 0 and episode > 0: # Every N episodes
-            save_dir = Path('backend/saved_models') # Save directory
-            save_dir.mkdir(exist_ok=True) # Create if needed
-            save_path = save_dir / f'dqn_checkpoint_ep{episode}.pt' # Checkpoint path
-            agent.save(save_path) # Save checkpoint
-
-    # Save final model
     print("\n" + "=" * 60)
-    print("Training complete!")
+    if interrupted:
+        print("Training interrupted.")
+    else:
+        print("Training complete!")
     print("=" * 60)
 
-    save_dir = Path('backend/saved_models') # Save directory
-    save_dir.mkdir(exist_ok=True) # Create if needed
-    final_path = save_dir / 'dqn_final.pt' # Final model path
-    agent.save(final_path) # Save final model
+    save_dir = Path('backend/saved_models')
+    save_dir.mkdir(exist_ok=True)
+    final_path = save_dir / 'dqn_final.pt'
+    agent.save(final_path)  # save model
 
-    # Save training stats
-    stats_path = save_dir / 'training_stats.npz' # Stats path
-    np.savez(stats_path, **training_stats) # Save statistics
-    print(f"✓ Training statistics saved to {stats_path}")
+    stats_path = save_dir / 'training_stats.npz'
+    np.savez(stats_path, **training_stats)  # save stats
+    print(f"Training statistics saved to {stats_path}")
 
-    # Print final statistics
-    print(f"\nFinal Statistics:")
-    print(f"  Average reward (last 100): {np.mean(training_stats['episode_rewards'][-100:]):.2f}") # Avg reward
-    print(f"  Average loss (last 100): {np.mean(training_stats['losses'][-100:]):.4f}") # Avg loss
-    print(f"  Final epsilon: {agent.epsilon:.3f}") # Final epsilon
-    print(f"  Final platform health: {training_stats['platform_health'][-1]:.2f}") # Final health
-    print(f"  Final false positive rate: {training_stats['false_positive_rates'][-1]:.3f}") # Final FP rate
+    if training_stats['episode_rewards']:
+        print(f"\nFinal Statistics:")
+        print(f"  Average reward (last 100): {np.mean(training_stats['episode_rewards'][-100:]):.2f}")
+        print(f"  Average loss (last 100): {np.mean(training_stats['losses'][-100:]):.4f}")
+        print(f"  Final epsilon: {agent.epsilon:.3f}")
+        print(f"  Final platform health: {training_stats['platform_health'][-1]:.2f}")
+        print(f"  Final false positive rate: {training_stats['false_positive_rates'][-1]:.3f}")
+    else:
+        print("\nNo completed episodes to summarize.")
 
-def main(): # Main function
-    # Check for CUDA
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' # Select device
+
+# Select device, validate data files, and start training.
+def main():
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # select device
     print(f"Using device: {device}")
 
-    # Check if data exists
-    embeddings_path = 'backend/data/embeddings.npy' # Embeddings path
-    labels_path = 'backend/data/labels.npy' # Labels path
+    embeddings_path = 'backend/data/embeddings.npy'
+    labels_path = 'backend/data/labels.npy'
 
-    if not os.path.exists(embeddings_path): # Check file exists
+    if not os.path.exists(embeddings_path):
         print("Error: Embeddings not found. Please run:")
         print("  1. python backend/data/download.py")
         print("  2. python backend/data/preprocess.py")
-        sys.exit(1) # Exit with error
+        sys.exit(1)
 
-    # Start training
-    train( # Run training
-        embeddings_path=embeddings_path, # Embeddings path
-        labels_path=labels_path, # Labels path
-        num_episodes=1000, # 1000 episodes
-        max_steps=500, # 500 steps each
-        batch_size=128, # Batch of 128
-        save_interval=100, # Save every 100
-        device=device # Device
+    train(
+        embeddings_path=embeddings_path,
+        labels_path=labels_path,
+        num_episodes=1000,
+        max_steps=500,
+        batch_size=128,
+        save_interval=100,
+        device=device
     )
 
+
 if __name__ == "__main__":
-    main() # Run main function
+    main()

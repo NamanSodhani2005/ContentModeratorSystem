@@ -1,13 +1,14 @@
 """
-Hate speech head for 3-class classification on top of frozen embeddings.
+Hate speech head.
 """
 
 import torch.nn as nn
 
 
 class HateSpeechHead(nn.Module):
-    """Lightweight classifier for hate/offensive/neither."""
+    """Hate/offensive classifier."""
 
+    # Build a small MLP head to classify embeddings into three categories.
     def __init__(self, input_dim=768, hidden_dim=128, num_classes=3):
         super().__init__()
         self.net = nn.Sequential(
@@ -15,7 +16,8 @@ class HateSpeechHead(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, num_classes)
-        )
+        )  # MLP head
 
+    # Run embeddings through the head to produce class logits.
     def forward(self, embeddings):
         return self.net(embeddings)

@@ -160,9 +160,10 @@ Try these examples:
 
 ### RL Environment
 
-**State Space** (786 dimensions):
+**State Space** (788 dimensions):
 - Comment embedding: 768 dims (DistilBERT)
 - Hate/offensive scores: 3 dims
+- Target features: 2 dims (target presence, toxicity given target)
 - User history: 10 dims (toxicity avg, warnings, bans, activity, etc.)
 - Platform metrics: 5 dims (health, satisfaction, false positive rate, etc.)
 
@@ -184,8 +185,8 @@ reward = toxicity_reduction
 ### Policy Network
 
 ```
-Input (786) → Comment Processor (768→256)
-            → Context Processor (18→64)
+Input (788) → Comment Processor (768→256)
+            → Context Processor (20→64)
             → Attention Layer
             → Q-Network → Q-values (5)
 ```
@@ -350,7 +351,7 @@ If you use this project in your research, please cite:
 - **Jigsaw/Conversation AI**: Toxic comment datasets
 - **Hugging Face**: Transformers library
 - **Detoxify**: Toxicity classification models
-- **OpenAI Gymnasium**: RL environment framework
+- **Gymnasium**: RL environment framework
 
 ---
 

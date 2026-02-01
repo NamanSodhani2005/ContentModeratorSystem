@@ -1,8 +1,20 @@
-import React from 'react'; // Import React library
+import React, { useEffect, useState } from 'react'; // Import React hooks
 import { Shield, AlertTriangle, X, Ban, XCircle, CheckCircle } from 'lucide-react'; // Import all icons
 
-const ModerationResult = ({ result }) => { // Define ModerationResult component
+const ModerationResult = ({ result, comment, onFeedback }) => { // Define ModerationResult component
   if (!result) return null; // Return null if no result
+
+  const [feedbackState, setFeedbackState] = useState({ // Track feedback state
+    status: 'idle',
+    choice: null,
+    error: null,
+    message: null,
+    updated: false // Update flag
+  });
+
+  useEffect(() => { // Reset feedback on change
+    setFeedbackState({ status: 'idle', choice: null, error: null, message: null, updated: false });
+  }, [result?.decision, comment]);
 
   const getActionColor = (decision) => { // Define color getter function
     const colors = { // Define color map
@@ -34,6 +46,35 @@ const ModerationResult = ({ result }) => { // Define ModerationResult component
     { key: 'insult', label: 'Insult' }, // Insult category
     { key: 'identity_attack', label: 'Identity Attack' } // Identity attack category
   ];
+
+  const feedbackOptions = [ // Feedback options
+    { key: 'too_soft', label: 'Too lenient' },
+    { key: 'good', label: 'Just right' },
+    { key: 'too_harsh', label: 'Too harsh' }
+  ];
+
+  const canSendFeedback = Boolean(onFeedback && comment && result?.decision); // Validate feedback inputs
+  const isSubmitting = feedbackState.status === 'submitting'; // Submission state
+
+  const handleFeedback = async (feedbackKey) => { // Handle feedback submit
+    if (!canSendFeedback || isSubmitting) { // Guard invalid state
+      return;
+    }
+
+    setFeedbackState({ status: 'submitting', choice: feedbackKey, error: null, message: null, updated: false });
+    try {
+      const response = await onFeedback(comment, result.decision, feedbackKey);
+      const updated = Boolean(response?.updated);
+      // Build feedback message
+      const message = updated
+        ? `Model updated (${response.update_steps || 0} steps).`
+        : 'Feedback saved. Model will update after more feedback.';
+      setFeedbackState({ status: 'success', choice: feedbackKey, error: null, message, updated });
+    } catch (err) {
+      const message = err.response?.data?.detail || 'Failed to send feedback.';
+      setFeedbackState({ status: 'error', choice: feedbackKey, error: message, message: null, updated: false });
+    }
+  };
 
   return ( // Return JSX
     <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl mt-6 animate-fade-in"> {/* Main result container */}
@@ -84,6 +125,42 @@ const ModerationResult = ({ result }) => { // Define ModerationResult component
           })}
         </div> {/* Close categories container */}
       </div> {/* Close toxicity section */}
+
+      {/* Feedback */}
+      <div className="mb-6"> {/* Feedback section */}
+        <h4 className="font-semibold text-gray-700 mb-3">Was this decision fair?</h4> {/* Section title */}
+        <div className="flex flex-wrap gap-2"> {/* Button row */}
+          {feedbackOptions.map((option) => { // Map feedback options
+            const isSelected = feedbackState.choice === option.key; // Selected state
+            const baseClasses = 'px-3 py-2 rounded-lg border text-sm font-medium transition-colors';
+            const stateClasses = isSelected
+              ? 'bg-purple-50 border-purple-300 text-purple-700'
+              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50';
+            const disabledClasses = !canSendFeedback || isSubmitting ? 'opacity-60 cursor-not-allowed' : '';
+
+            return ( // Return feedback button
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => handleFeedback(option.key)}
+                disabled={!canSendFeedback || isSubmitting}
+                className={`${baseClasses} ${stateClasses} ${disabledClasses}`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div> {/* Close button row */}
+        <p className="text-xs text-gray-500 mt-2">Your feedback updates the model online.</p> {/* Helper text */}
+        {feedbackState.status === 'success' && feedbackState.message && ( // Success message
+          <p className={`text-sm mt-2 ${feedbackState.updated ? 'text-green-700' : 'text-gray-600'}`}>
+            {feedbackState.message}
+          </p>
+        )}
+        {feedbackState.status === 'error' && ( // Error message
+          <p className="text-sm text-red-600 mt-2">{feedbackState.error}</p>
+        )}
+      </div> {/* Close feedback section */}
 
       {/* Alternative Actions */}
       <div> {/* Alternatives section */}

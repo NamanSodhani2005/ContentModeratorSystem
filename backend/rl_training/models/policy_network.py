@@ -1,110 +1,85 @@
 """
-Attention-based Q-Network for content moderation.
+Attention Q-network.
 """
 
-import torch # PyTorch framework
-import torch.nn as nn # Neural network modules
-import torch.nn.functional as F # Functional operations
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-class AttentionLayer(nn.Module): # Attention layer class
-    """Attention mechanism for interpretability."""
 
-    def __init__(self, input_dim, attention_dim=128): # Initialize attention
-        super().__init__() # Call parent constructor
-        self.attention = nn.Sequential( # Attention network
-            nn.Linear(input_dim, attention_dim), # First projection
-            nn.Tanh(), # Nonlinearity
-            nn.Linear(attention_dim, input_dim) # Per-feature scores
+class AttentionLayer(nn.Module):
+    """Feature attention layer."""
+
+    # Build attention projections to score features for interpretability.
+    def __init__(self, input_dim, attention_dim=128):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, attention_dim),
+            nn.Tanh(),
+            nn.Linear(attention_dim, input_dim)
         )
 
-    def forward(self, x): # Forward pass
-        """
-        Args:
-            x: (batch_size, input_dim)
-        Returns:
-            attended: (batch_size, input_dim)
-            weights: (batch_size, input_dim) - attention weights
-        """
-        scores = self.attention(x) # Compute attention scores
-        weights = torch.softmax(scores, dim=-1) # Normalize across features
-        attended = x * weights # Apply attention
-        return attended, weights # Return results
+    # Compute attention weights and reweight features for downstream scoring.
+    def forward(self, x):
+        scores = self.attention(x)
+        weights = torch.softmax(scores, dim=-1)  # normalize weights
+        attended = x * weights  # apply weights
+        return attended, weights
 
-class PolicyNetwork(nn.Module): # Q-network class
-    """
-    Q-Network with attention for content moderation.
 
-    Architecture:
-    - Comment processor: 768 → 256
-    - Context processor: 18 → 64
-    - Attention layer for interpretability
-    - Q-value heads: 320 → 5 actions
-    """
+class PolicyNetwork(nn.Module):
+    """Q-network with attention."""
 
-    def __init__(self, comment_dim=768, context_dim=18, hidden_dim=256, num_actions=5): # Initialize network
-        super().__init__() # Call parent constructor
+    # Configure encoders, attention block, and Q head for action scoring.
+    def __init__(self, comment_dim=768, context_dim=22, hidden_dim=256, num_actions=5):
+        super().__init__()
 
-        self.comment_dim = comment_dim # Comment embedding size
-        self.context_dim = context_dim # Context vector size
+        self.comment_dim = comment_dim
+        self.context_dim = context_dim
 
-        # Comment embedding processor
-        self.comment_processor = nn.Sequential( # Comment encoder
-            nn.Linear(comment_dim, hidden_dim), # Project to hidden
-            nn.ReLU(), # Activation
-            nn.Dropout(0.3), # Regularization
-            nn.Linear(hidden_dim, hidden_dim), # Second layer
-            nn.ReLU() # Activation
-        )
+        self.comment_processor = nn.Sequential(
+            nn.Linear(comment_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU()
+        )  # comment encoder
 
-        # Context processor (user history + platform metrics)
-        self.context_processor = nn.Sequential( # Context encoder
-            nn.Linear(context_dim, 64), # Project to 64
-            nn.ReLU(), # Activation
-            nn.Linear(64, 64), # Second layer
-            nn.ReLU() # Activation
-        )
+        self.context_processor = nn.Sequential(
+            nn.Linear(context_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU()
+        )  # context encoder
 
-        # Attention layer
-        self.attention = AttentionLayer(hidden_dim + 64, attention_dim=128) # Attention mechanism
+        self.attention = AttentionLayer(hidden_dim + 64, attention_dim=128)  # attention block
 
-        # Q-value heads
-        self.q_network = nn.Sequential( # Q-value network
-            nn.Linear(hidden_dim + 64, 128), # Project to 128
-            nn.ReLU(), # Activation
-            nn.Dropout(0.2), # Regularization
-            nn.Linear(128, num_actions) # Output Q-values
-        )
+        self.q_network = nn.Sequential(
+            nn.Linear(hidden_dim + 64, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, num_actions)
+        )  # Q head
 
-    def forward(self, state): # Forward pass
-        """
-        Args:
-            state: (batch_size, 786) - [comment(768), context(18)]
-        Returns:
-            q_values: (batch_size, 5)
-            attention_weights: (batch_size, 320) - per-feature weights
-        """
-        # Split state into components
-        comment_embedding = state[:, :self.comment_dim] # Extract comment part
-        context = state[:, self.comment_dim:] # Extract context part
+    # Encode inputs, apply attention, and return Q values with weights.
+    def forward(self, state):
+        comment_embedding = state[:, :self.comment_dim]  # comment slice
+        context = state[:, self.comment_dim:]  # context slice
 
-        # Process components
-        comment_features = self.comment_processor(comment_embedding) # Encode comment
-        context_features = self.context_processor(context) # Encode context
+        comment_features = self.comment_processor(comment_embedding)
+        context_features = self.context_processor(context)
 
-        # Combine features
-        combined = torch.cat([comment_features, context_features], dim=-1) # Concatenate features
+        combined = torch.cat([comment_features, context_features], dim=-1)  # merge features
 
-        # Apply attention
-        attended, attention_weights = self.attention(combined) # Apply attention mechanism
+        attended, attention_weights = self.attention(combined)  # apply attention
 
-        # Compute Q-values
-        q_values = self.q_network(attended) # Compute action values
+        q_values = self.q_network(attended)  # Q values
 
-        return q_values, attention_weights # Return outputs
+        return q_values, attention_weights
 
-    def get_action(self, state): # Select best action
-        """Select action with highest Q-value."""
-        with torch.no_grad(): # No gradient needed
-            q_values, attention_weights = self.forward(state) # Forward pass
-            action = torch.argmax(q_values, dim=-1) # Select max Q
-        return action, q_values, attention_weights # Return action and values
+    # Select greedy action and return Q values with attention weights.
+    def get_action(self, state):
+        with torch.no_grad():
+            q_values, attention_weights = self.forward(state)
+            action = torch.argmax(q_values, dim=-1)  # greedy action
+        return action, q_values, attention_weights

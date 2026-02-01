@@ -1,301 +1,252 @@
 """
-Main runner for Content Moderation System.
-Handles preprocessing, training, and API serving.
+Unified runner for Content Moderation System.
+
+Usage:
+  python run.py train
+  python run.py serve
 """
 
-import os # File operations
-import sys # System operations
-import numpy as np # Array operations
-import pandas as pd # Data manipulation
-import torch # PyTorch framework
-from pathlib import Path # Path utilities
-from tqdm import tqdm # Progress bars
-from transformers import DistilBertTokenizer, DistilBertModel # BERT models
+import argparse
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
 
-# Add backend to path
-sys.path.append('backend') # Add backend to path
+ROOT = Path(__file__).resolve().parent
+BACKEND_DIR = ROOT / "backend"
+DATA_DIR = BACKEND_DIR / "data"
+ARCHIVE_DIR = DATA_DIR / "archive"
+SAVED_MODELS_DIR = BACKEND_DIR / "saved_models"
 
-from rl_training.environment.forum_env import ForumEnvironment # RL environment
-from rl_training.models.policy_network import PolicyNetwork # Q-network
-from rl_training.agents.dqn_agent import DQNAgent # DQN agent
-from rl_training.models.hate_speech_head import HateSpeechHead # Hate speech head
+HATE_DATA_PATH = ARCHIVE_DIR / "labeled_data.csv"
+TRAIN_DATA_PATH = DATA_DIR / "train.csv"
+HATE_HEAD_PATH = SAVED_MODELS_DIR / "hate_speech_head.pt"
+TARGET_SPAN_PATH = SAVED_MODELS_DIR / "target_span_model.pt"
+DQN_PATH = SAVED_MODELS_DIR / "dqn_final.pt"
 
-HATE_HEAD_PATH = Path('backend/saved_models/hate_speech_head.pt')
+EMBEDDINGS_PATH = DATA_DIR / "embeddings.npy"
+LABELS_PATH = DATA_DIR / "labels.npy"
+HATE_SCORES_PATH = DATA_DIR / "hate_scores.npy"
+TARGET_FEATURES_PATH = DATA_DIR / "target_features.npy"
+TARGET_TOXICITY_PATH = DATA_DIR / "target_toxicity.npy"
 
-def preprocess_data(): # Preprocess data
-    """Step 1: Generate embeddings from raw CSV"""
-    print("\n" + "="*60)
-    print("STEP 1: DATA PREPROCESSING")
-    print("="*60)
 
-    data_dir = Path('backend/data') # Data directory
-    train_path = data_dir / 'train.csv' # CSV path
+def _ensure_backend_path():
+    backend_str = str(BACKEND_DIR)
+    if backend_str not in sys.path:
+        sys.path.append(backend_str)
 
-    if not train_path.exists(): # Check if exists
-        print(f"❌ Error: {train_path} not found!")
-        print("Please place train.csv in backend/data/")
+
+def train_pipeline(
+    force_preprocess=False,
+    skip_existing=False,
+    force_hate_head=False,
+    force_target_span=False
+):
+    _ensure_backend_path()
+
+    if not TRAIN_DATA_PATH.exists():
+        print(f"Error: missing dataset at {TRAIN_DATA_PATH}")
         return False
 
-    # Check if already processed
-    if (data_dir / 'embeddings.npy').exists(): # Check if done
-        print("✓ Embeddings already exist. Skipping preprocessing.")
-        return True
+    trained_hate = False
+    trained_target = False
 
-    print("Loading CSV data...")
-    df = pd.read_csv(train_path, nrows=50000) # Load 50K rows
-    comments = df['comment_text'].fillna("").tolist() # Extract comments
+    # Step 1: Hate speech head (optional)
+    if HATE_DATA_PATH.exists():
+        if HATE_HEAD_PATH.exists() and not force_hate_head:
+            print("Step 1: Hate speech head already exists. Skipping.")
+        else:
+            print("Step 1: Training hate speech head...")
+            from rl_training.train_hate_speech_head import train as train_hate_head
+            args = SimpleNamespace(
+                epochs=3,
+                batch_size=64,
+                embed_batch_size=32,
+                max_length=128,
+                lr=1e-3,
+                seed=42,
+                val_ratio=0.1
+            )
+            train_hate_head(args)
+            trained_hate = True
+    else:
+        print("Step 1: Skipping hate speech head (dataset not found).")
 
-    toxicity_cols = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate'] # Label columns
-    labels = df[toxicity_cols].values # Extract labels
+    # Step 2: Target span model (optional)
+    if HATE_DATA_PATH.exists():
+        if TARGET_SPAN_PATH.exists() and not force_target_span:
+            print("Step 2: Target span model already exists. Skipping.")
+        else:
+            print("Step 2: Training target span model...")
+            from rl_training.train_target_span_model import train as train_target_span
+            args = SimpleNamespace(
+                epochs=5,
+                batch_size=32,
+                max_length=128,
+                lr=2e-5,
+                seed=42,
+                val_ratio=0.1,
+                num_tox_classes=3,
+                hatexplain_path=str(DATA_DIR / "dataset.json"),
+                max_ngram=3,
+                min_lexicon_count=5,
+                min_lexicon_precision=0.6,
+                max_lexicon_terms=200,
+                ethos_threshold=0.5,
+                use_lexicon_cache=False
+            )
+            train_target_span(args)
+            trained_target = True
+    else:
+        print("Step 2: Skipping target span model (dataset not found).")
 
-    print(f"✓ Loaded {len(comments)} comments")
-    print("\nLoading DistilBERT model...")
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Select device
-    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased') # Load tokenizer
-    model = DistilBertModel.from_pretrained('distilbert-base-uncased') # Load model
-    model.to(device) # Move to device
-    model.eval() # Eval mode
-    print(f"✓ Using device: {device}")
-
-    print("\nGenerating embeddings (this takes ~30 minutes)...")
-    batch_size = 32 # Batch size
-    embeddings = [] # Store embeddings
-
-    for idx in tqdm(range(0, len(comments), batch_size), desc="Progress"): # Process batches
-        batch = comments[idx:idx + batch_size] # Get batch
-
-        with torch.no_grad(): # No gradients
-            inputs = tokenizer(batch, padding=True, truncation=True, max_length=128, return_tensors='pt').to(device) # Tokenize
-            outputs = model(**inputs) # Forward pass
-            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy() # Get CLS token
-            embeddings.append(batch_embeddings) # Add to list
-
-    embeddings = np.vstack(embeddings) # Stack all
-
-    # Save files
-    np.save(data_dir / 'embeddings.npy', embeddings) # Save embeddings
-    np.save(data_dir / 'labels.npy', labels) # Save labels
-
+    # Step 3: Preprocess embeddings + features
+    required = [EMBEDDINGS_PATH, LABELS_PATH]
     if HATE_HEAD_PATH.exists():
-        print("Generating hate speech scores...")
-        hate_head = HateSpeechHead()
-        hate_head.load_state_dict(torch.load(HATE_HEAD_PATH, map_location=device))
-        hate_head.to(device)
-        hate_head.eval()
+        required.append(HATE_SCORES_PATH)
+    if TARGET_SPAN_PATH.exists():
+        required.append(TARGET_FEATURES_PATH)
+        required.append(TARGET_TOXICITY_PATH)
 
-        hate_scores = []
-        batch_size = 256
-        for idx in tqdm(range(0, len(embeddings), batch_size), desc="Hate scores"):
-            batch = embeddings[idx:idx + batch_size]
-            with torch.no_grad():
-                batch_tensor = torch.tensor(batch, dtype=torch.float32, device=device)
-                logits = hate_head(batch_tensor)
-                probs = torch.softmax(logits, dim=-1).cpu().numpy()
-                hate_scores.append(probs)
+    needs_preprocess = force_preprocess or trained_hate or trained_target or not all(
+        path.exists() for path in required
+    )
 
-        hate_scores = np.vstack(hate_scores)
-        np.save(data_dir / 'hate_scores.npy', hate_scores)
-        print(f"  Hate scores: {hate_scores.shape}")
+    if needs_preprocess:
+        print("Step 3: Preprocessing embeddings and features...")
+        from data.preprocess import main as preprocess_main
+        preprocess_main()
+    else:
+        print("Step 3: Preprocessing already complete. Skipping.")
 
-    print(f"\n✓ Preprocessing complete!")
-    print(f"  Embeddings: {embeddings.shape}")
-    print(f"  Toxicity rate: {labels[:, 0].mean():.2%}")
-
-    return True
-
-def train_model(): # Train DQN model
-    """Step 2: Train DQN agent"""
-    print("\n" + "="*60)
-    print("STEP 2: TRAINING DQN AGENT")
-    print("="*60)
-
-    # Check if already trained
-    if Path('backend/saved_models/dqn_final.pt').exists(): # Check if exists
-        print("✓ Trained model already exists. Skipping training.")
-        return True
-
-    # Load data
-    embeddings_path = 'backend/data/embeddings.npy' # Embeddings path
-    labels_path = 'backend/data/labels.npy' # Labels path
-
-    if not os.path.exists(embeddings_path): # Check if exists
-        print("❌ Error: Run preprocessing first!")
+    if not EMBEDDINGS_PATH.exists() or not LABELS_PATH.exists():
+        print("Error: embeddings or labels missing after preprocessing.")
         return False
 
-    print("Loading data...")
-    embeddings = np.load(embeddings_path) # Load embeddings
-    labels = np.load(labels_path) # Load labels
-    hate_scores_path = 'backend/data/hate_scores.npy' # Hate scores path
-    hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
-    print(f"✓ Loaded {len(embeddings)} comments")
+    # Step 4: Train DQN agent
+    if DQN_PATH.exists() and skip_existing:
+        print("Step 4: DQN model already exists. Skipping.")
+        return True
 
-    # Initialize environment
-    print("\nInitializing environment...")
-    env = ForumEnvironment(embeddings, labels, hate_scores=hate_scores, max_steps=500) # Create env
-    print(f"✓ State space: {env.observation_space.shape}")
-    print(f"✓ Action space: {env.action_space.n}")
+    print("Step 4: Training DQN agent...")
+    from rl_training.train import train as train_dqn
 
-    # Initialize networks
-    print("\nInitializing neural networks...")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' # Select device
-    print(f"✓ Using device: {device}")
+    try:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        device = "cpu"
 
-    policy_network = PolicyNetwork() # Policy network
-    target_network = PolicyNetwork() # Target network
-    print(f"✓ Parameters: {sum(p.numel() for p in policy_network.parameters()):,}")
-
-    # Initialize agent
-    print("\nInitializing DQN agent...")
-    agent = DQNAgent( # Create agent
-        policy_network=policy_network, # Policy network
-        target_network=target_network, # Target network
-        device=device, # Device
-        lr=1e-4, # Learning rate
-        gamma=0.99, # Discount factor
-        epsilon_start=1.0, # Initial epsilon
-        epsilon_end=0.05, # Final epsilon
-        epsilon_decay=0.995 # Decay rate
+    train_dqn(
+        embeddings_path=str(EMBEDDINGS_PATH),
+        labels_path=str(LABELS_PATH),
+        hate_scores_path=str(HATE_SCORES_PATH),
+        target_features_path=str(TARGET_FEATURES_PATH),
+        target_toxicity_path=str(TARGET_TOXICITY_PATH),
+        num_episodes=1000,
+        max_steps=500,
+        batch_size=128,
+        save_interval=100,
+        device=device
     )
-    print("✓ Agent ready")
-
-    # Training loop
-    print("\n" + "="*60)
-    print("TRAINING (1000 episodes, ~2-4 hours)")
-    print("="*60 + "\n")
-
-    num_episodes = 1000 # Total episodes
-    max_steps = 500 # Steps per episode
-    batch_size = 128 # Batch size
-    save_interval = 100 # Save every N episodes
-
-    training_stats = { # Stats dictionary
-        'episode_rewards': [], # Rewards
-        'episode_lengths': [], # Lengths
-        'losses': [], # Losses
-        'epsilon_values': [], # Epsilon
-        'platform_health': [], # Health
-        'false_positive_rates': [] # FP rate
-    }
-
-    for episode in range(num_episodes): # Episode loop
-        state, _ = env.reset() # Reset env
-        episode_reward = 0 # Reset reward
-        episode_loss = [] # Reset losses
-
-        for step in range(max_steps): # Step loop
-            action, q_values, attention = agent.select_action(state) # Select action
-            next_state, reward, done, truncated, info = env.step(action) # Take step
-            agent.replay_buffer.push(state, action, reward, next_state, done) # Store experience
-
-            loss = agent.train_step(batch_size) # Train
-            if loss is not None: # If trained
-                episode_loss.append(loss) # Record loss
-
-            episode_reward += reward # Accumulate reward
-            state = next_state # Update state
-
-            if done: # If done
-                break # Exit loop
-
-        # Update target network
-        if episode % 10 == 0: # Every 10 episodes
-            agent.update_target_network(tau=0.005) # Soft update
-
-        agent.decay_epsilon() # Decay epsilon
-
-        # Record stats
-        training_stats['episode_rewards'].append(episode_reward) # Record reward
-        training_stats['episode_lengths'].append(step + 1) # Record length
-        training_stats['losses'].append(np.mean(episode_loss) if episode_loss else 0) # Record loss
-        training_stats['epsilon_values'].append(agent.epsilon) # Record epsilon
-        training_stats['platform_health'].append(info['platform_health']) # Record health
-        training_stats['false_positive_rates'].append(info['false_positive_rate']) # Record FP rate
-
-        # Print progress
-        if episode % 10 == 0: # Every 10 episodes
-            avg_reward = np.mean(training_stats['episode_rewards'][-10:]) # Avg reward
-            avg_loss = np.mean(training_stats['losses'][-10:]) # Avg loss
-            print(f"Episode {episode:4d}/{num_episodes} | " # Print progress
-                  f"Reward: {avg_reward:7.2f} | "
-                  f"Loss: {avg_loss:.4f} | "
-                  f"ε: {agent.epsilon:.3f} | "
-                  f"Health: {info['platform_health']:.2f} | "
-                  f"FP: {info['false_positive_rate']:.3f}")
-
-        # Save checkpoint
-        if episode % save_interval == 0 and episode > 0: # Every N episodes
-            save_dir = Path('backend/saved_models') # Save directory
-            save_dir.mkdir(exist_ok=True) # Create directory
-            save_path = save_dir / f'dqn_checkpoint_ep{episode}.pt' # Checkpoint path
-            agent.save(save_path) # Save checkpoint
-
-    # Save final model
-    print("\n" + "="*60)
-    print("TRAINING COMPLETE!")
-    print("="*60)
-
-    save_dir = Path('backend/saved_models') # Save directory
-    save_dir.mkdir(exist_ok=True) # Create directory
-    final_path = save_dir / 'dqn_final.pt' # Final path
-    agent.save(final_path) # Save model
-
-    # Save stats
-    stats_path = save_dir / 'training_stats.npz' # Stats path
-    np.savez(stats_path, **training_stats) # Save stats
-    print(f"✓ Stats saved to {stats_path}")
-
-    # Print final stats
-    print(f"\nFinal Statistics:")
-    print(f"  Avg reward (last 100): {np.mean(training_stats['episode_rewards'][-100:]):.2f}")
-    print(f"  Avg loss (last 100): {np.mean(training_stats['losses'][-100:]):.4f}")
-    print(f"  Final epsilon: {agent.epsilon:.3f}")
-    print(f"  Final platform health: {training_stats['platform_health'][-1]:.2f}")
-    print(f"  Final FP rate: {training_stats['false_positive_rates'][-1]:.3f}")
 
     return True
 
-def run_api(): # Run API server
-    """Step 3: Start API server"""
-    print("\n" + "="*60)
-    print("STEP 3: STARTING API SERVER")
-    print("="*60)
-    print("\nBackend will run on: http://localhost:8000")
-    print("Frontend should run on: http://localhost:5173")
-    print("\nPress Ctrl+C to stop\n")
 
-    import uvicorn # Uvicorn server
-    from backend.api.app import app # Import app
+def _npm_command():
+    if os.name == "nt":
+        return ["cmd", "/c", "npm", "run", "dev"]
+    return ["npm", "run", "dev"]
 
-    uvicorn.run(app, host="0.0.0.0", port=8000) # Run server
 
-def main(): # Main function
-    """Run full pipeline"""
-    print("\n" + "="*60)
-    print("CONTENT MODERATION SYSTEM - FULL PIPELINE")
-    print("="*60)
+def serve_app(start_frontend=True):
+    backend_cmd = [sys.executable, str(BACKEND_DIR / "api" / "app.py")]
+    backend_proc = subprocess.Popen(backend_cmd, cwd=str(ROOT))
+    processes = [("backend", backend_proc)]
 
-    # Step 1: Preprocess
-    if not preprocess_data(): # Run preprocessing
-        print("\nError: Preprocessing failed!")
-        return
+    if start_frontend:
+        frontend_cmd = _npm_command()
+        frontend_proc = subprocess.Popen(frontend_cmd, cwd=str(ROOT / "frontend"))
+        processes.append(("frontend", frontend_proc))
 
-    # Step 2: Train
-    if not train_model(): # Run training
-        print("\nError: Training failed!")
-        return
+    print("Backend: http://localhost:8000")
+    if start_frontend:
+        print("Frontend: http://localhost:5173")
 
-    # Step 3: Run API
-    print("\n" + "="*60)
-    print("✓ ALL STEPS COMPLETE!")
-    print("="*60)
-    print("\nNow starting API server...")
-    print("Open another terminal and run:")
-    print("  cd frontend")
-    print("  npm install")
-    print("  npm run dev")
-    print()
+    try:
+        while True:
+            for name, proc in processes:
+                if proc.poll() is not None:
+                    print(f"{name} exited with code {proc.returncode}")
+                    return proc.returncode
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("Stopping...")
+    finally:
+        for _, proc in processes:
+            if proc.poll() is None:
+                proc.terminate()
+        for _, proc in processes:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+    return 0
 
-    run_api() # Run API
+
+def main():
+    parser = argparse.ArgumentParser(description="Content Moderation System runner")
+    subparsers = parser.add_subparsers(dest="command")
+
+    train_parser = subparsers.add_parser("train", help="Train models and DQN")
+    train_parser.add_argument(
+        "--force-preprocess",
+        action="store_true",
+        help="Regenerate embeddings/features even if they exist"
+    )
+    train_parser.add_argument(
+        "--force-hate-head",
+        action="store_true",
+        help="Retrain the hate speech head even if it exists"
+    )
+    train_parser.add_argument(
+        "--force-target-span",
+        action="store_true",
+        help="Retrain the target span model even if it exists"
+    )
+    train_parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip DQN training if dqn_final.pt already exists"
+    )
+
+    serve_parser = subparsers.add_parser("serve", help="Start backend and frontend")
+    serve_parser.add_argument(
+        "--backend-only",
+        action="store_true",
+        help="Start only the backend API server"
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        ok = train_pipeline(
+            force_preprocess=args.force_preprocess,
+            skip_existing=args.skip_existing,
+            force_hate_head=args.force_hate_head,
+            force_target_span=args.force_target_span
+        )
+        return 0 if ok else 1
+
+    if args.command == "serve":
+        return serve_app(start_frontend=not args.backend_only)
+
+    parser.print_help()
+    return 1
+
 
 if __name__ == "__main__":
-    main() # Run main
+    raise SystemExit(main())

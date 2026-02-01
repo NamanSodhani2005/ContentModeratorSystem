@@ -1,18 +1,20 @@
 import React, { useState } from 'react'; // Import React hooks
 import CommentInput from './components/CommentInput'; // Import CommentInput component
 import ModerationResult from './components/ModerationResult'; // Import ModerationResult component
-import { moderateComment } from './api'; // Import moderation API
+import { moderateComment, submitFeedback } from './api'; // Import moderation API
 import { Shield } from 'lucide-react'; // Import Shield icon
 
 function App() { // Define App component
   const [loading, setLoading] = useState(false); // Initialize loading state
   const [result, setResult] = useState(null); // Initialize result state
   const [error, setError] = useState(null); // Initialize error state
+  const [lastComment, setLastComment] = useState(''); // Store last moderated comment
 
   const handleModerate = async (comment) => { // Define moderation handler
     setLoading(true); // Set loading true
     setError(null); // Clear previous errors
     setResult(null); // Clear previous results
+    setLastComment(comment); // Save comment for feedback
 
     try { // Try API call
       const response = await moderateComment(comment); // Call moderation API
@@ -23,6 +25,10 @@ function App() { // Define App component
     } finally { // Execute after try/catch
       setLoading(false); // Set loading false
     }
+  };
+
+  const handleFeedback = async (comment, decision, feedback) => { // Define feedback handler
+    return submitFeedback(comment, decision, feedback); // Send feedback to backend
   };
 
   return ( // Return JSX
@@ -53,7 +59,13 @@ function App() { // Define App component
         )}
 
         {/* Result */}
-        {result && <ModerationResult result={result} />} {/* Conditionally render result */}
+        {result && ( // Conditionally render result
+          <ModerationResult // Render result component
+            result={result} // Pass result data
+            comment={lastComment} // Pass original comment
+            onFeedback={handleFeedback} // Pass feedback handler
+          />
+        )}
 
         {/* Footer */}
         <div className="mt-12 text-center text-purple-100 text-sm"> {/* Footer container */}

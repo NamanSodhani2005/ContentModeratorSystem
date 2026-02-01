@@ -1,5 +1,5 @@
 """
-Train a hate speech head on top of frozen DistilBERT embeddings.
+Train hate speech head.
 """
 
 import argparse
@@ -30,15 +30,18 @@ LABEL_MAP = {
 
 
 class EmbeddingDataset(Dataset):
-    """Embeddings + class labels dataset."""
+    """Embeddings dataset."""
 
+    # Store embeddings and labels for indexing by DataLoader.
     def __init__(self, embeddings, labels):
         self.embeddings = embeddings
         self.labels = labels
 
+    # Return dataset size for DataLoader iteration.
     def __len__(self):
         return len(self.embeddings)
 
+    # Fetch one embedding and label pair as tensors.
     def __getitem__(self, idx):
         return (
             torch.tensor(self.embeddings[idx], dtype=torch.float32),
@@ -46,8 +49,9 @@ class EmbeddingDataset(Dataset):
         )
 
 
+# Create train and validation indices, stratified when multiple labels exist.
 def split_indices(labels, val_ratio, seed):
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed)  # rng
     labels = np.asarray(labels)
     indices = np.arange(len(labels))
 
@@ -71,11 +75,12 @@ def split_indices(labels, val_ratio, seed):
     return np.array(train_idx), np.array(val_idx)
 
 
+# Encode texts with DistilBERT and return CLS embeddings in batches.
 def compute_embeddings(texts, batch_size=32, max_length=128, device="cpu"):
-    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
-    model = DistilBertModel.from_pretrained("distilbert-base-uncased")
+    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")  # tokenizer
+    model = DistilBertModel.from_pretrained("distilbert-base-uncased")  # encoder
     model.to(device)
-    model.eval()
+    model.eval()  # eval mode
 
     embeddings = []
     for idx in tqdm(range(0, len(texts), batch_size), desc="Embedding tweets"):
@@ -89,22 +94,23 @@ def compute_embeddings(texts, batch_size=32, max_length=128, device="cpu"):
                 return_tensors="pt"
             ).to(device)
             outputs = model(**inputs)
-            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS vector
             embeddings.append(batch_embeddings)
 
     return np.vstack(embeddings)
 
 
+# Load cached embeddings or compute and save them from the dataset.
 def load_or_create_embeddings(device, batch_size=32, max_length=128):
     if EMBEDDINGS_PATH.exists() and LABELS_PATH.exists():
-        embeddings = np.load(EMBEDDINGS_PATH)
-        labels = np.load(LABELS_PATH)
+        embeddings = np.load(EMBEDDINGS_PATH)  # cached embeddings
+        labels = np.load(LABELS_PATH)  # cached labels
         return embeddings, labels
 
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"Missing dataset at {DATA_PATH}")
 
-    df = pd.read_csv(DATA_PATH)
+    df = pd.read_csv(DATA_PATH)  # load csv
     if "tweet" not in df.columns or "class" not in df.columns:
         raise ValueError("Expected columns 'tweet' and 'class' in labeled_data.csv")
 
@@ -119,8 +125,9 @@ def load_or_create_embeddings(device, batch_size=32, max_length=128):
     return embeddings, labels
 
 
+# Train the classification head and save model weights and config.
 def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # select device
 
     embeddings, labels = load_or_create_embeddings(
         device=device,
@@ -128,7 +135,7 @@ def train(args):
         max_length=args.max_length
     )
 
-    train_idx, val_idx = split_indices(labels, args.val_ratio, args.seed)
+    train_idx, val_idx = split_indices(labels, args.val_ratio, args.seed)  # stratified split
     train_ds = EmbeddingDataset(embeddings[train_idx], labels[train_idx])
     val_ds = EmbeddingDataset(embeddings[val_idx], labels[val_idx])
 
@@ -137,54 +144,63 @@ def train(args):
 
     model = HateSpeechHead(input_dim=embeddings.shape[1])
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)  # optimizer
+    criterion = torch.nn.CrossEntropyLoss()  # loss fn
 
-    for epoch in range(args.epochs):
-        model.train()
-        train_losses = []
-        for batch_embeddings, batch_labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}"):
-            batch_embeddings = batch_embeddings.to(device)
-            batch_labels = batch_labels.to(device)
-            logits = model(batch_embeddings)
-            loss = criterion(logits, batch_labels)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            train_losses.append(loss.item())
-
-        model.eval()
-        correct = 0
-        total = 0
-        val_losses = []
-        with torch.no_grad():
-            for batch_embeddings, batch_labels in val_loader:
+    interrupted = False
+    try:
+        for epoch in range(args.epochs):
+            model.train()
+            train_losses = []
+            for batch_embeddings, batch_labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}"):
                 batch_embeddings = batch_embeddings.to(device)
                 batch_labels = batch_labels.to(device)
                 logits = model(batch_embeddings)
                 loss = criterion(logits, batch_labels)
-                preds = torch.argmax(logits, dim=-1)
-                correct += (preds == batch_labels).sum().item()
-                total += batch_labels.size(0)
-                val_losses.append(loss.item())
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                train_losses.append(loss.item())
 
-        train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-        val_acc = correct / max(1, total)
-        print(f"Epoch {epoch + 1}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f}")
+            model.eval()
+            correct = 0
+            total = 0
+            val_losses = []
+            with torch.no_grad():
+                for batch_embeddings, batch_labels in val_loader:
+                    batch_embeddings = batch_embeddings.to(device)
+                    batch_labels = batch_labels.to(device)
+                    logits = model(batch_embeddings)
+                    loss = criterion(logits, batch_labels)
+                    preds = torch.argmax(logits, dim=-1)
+                    correct += (preds == batch_labels).sum().item()
+                    total += batch_labels.size(0)
+                    val_losses.append(loss.item())
+
+            train_loss = float(np.mean(train_losses)) if train_losses else 0.0
+            val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+            val_acc = correct / max(1, total)
+            print(f"Epoch {epoch + 1}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f}")
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nTraining interrupted by user. Saving model so far...")
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), MODEL_PATH)
+    torch.save(model.state_dict(), MODEL_PATH)  # save model
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         handle.write(
             '{"labels": {"0": "hate_speech", "1": "offensive_language", "2": "neither"}, '
             '"input_dim": %d}\n' % embeddings.shape[1]
-        )
+        )  # save config
 
-    print(f"Saved hate speech head to: {MODEL_PATH}")
+    if interrupted:
+        print(f"Saved hate speech head (partial training) to: {MODEL_PATH}")
+    else:
+        print(f"Saved hate speech head to: {MODEL_PATH}")
 
 
+# Parse CLI arguments for training options.
 def parse_args():
     parser = argparse.ArgumentParser(description="Train hate speech head on frozen embeddings.")
     parser.add_argument("--epochs", type=int, default=3)
