@@ -16,38 +16,43 @@ cd ..
 Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
 (`toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`).
 
-Preprocessing uses the base DistilBERT encoder (no fine-tuning).
+Optional datasets for extra heads/target features:
+- `backend/data/archive/labeled_data.csv` (hate/offensive head)
+- `backend/data/dataset.json` (HateXplain)
+- `backend/data/Ethos_Dataset_Binary.csv`, `backend/data/Ethos_Dataset_Multi_Label.csv`
+- `backend/data/SBIC.v2.agg.trn.csv`
+- `backend/data/measuring_hate_speech.csv`
+- `backend/data/hate-speech-and-offensive-language.csv`
 
-Optional: train a hate/offensive/neither head using `backend/data/archive/labeled_data.csv`:
+Optional stance augmentation:
 
 ```bash
-python backend/rl_training/train_hate_speech_head.py
+python backend/data/augment_stance.py
 ```
 
-If the head exists, preprocessing will also generate `backend/data/hate_scores.npy`.
+## Step 3: Train the Models
 
-## Step 3: Preprocess Data
+Recommended one-shot pipeline:
 
 ```bash
-python backend/data/preprocess.py
+python run.py train
 ```
 
-## Step 4: Train the Model
+Or run the full pipeline directly:
 
 ```bash
-# All-in-one training (hate head + embeddings + DQN)
 python backend/rl_training/train_all.py
-
-# Or train only the DQN agent
-# python backend/rl_training/train.py
-
-# Watch training progress:
-# Episode   10 | Reward:   45.23 | Loss: 0.1234 | Iae: 0.950
-# Episode   20 | Reward:   67.89 | Loss: 0.0987 | Iae: 0.903
-# ...
 ```
 
-## Step 5: Run the Application
+## Step 4: Run the Application
+
+One command (backend + frontend):
+
+```bash
+python run.py serve
+```
+
+Or run separately:
 
 **Terminal 1 - Backend:**
 ```bash
@@ -62,14 +67,17 @@ npm run dev
 
 **Open browser**: http://localhost:5173
 
-## Test It Out
+## Step 5: Test It Out
 
 Try these comments:
 
-1. "This is a great article!" → **Keep**
-2. "You're an idiot" → **Warn**
-3. "I hate you all" → **Remove**
-4. "Kill yourself" → **Temp Ban**
+1. "This is a great article!" -> **Keep**
+2. "You're an idiot" -> **Warn**
+3. "I hate you all" -> **Remove**
+4. "Kill yourself" -> **Temp Ban**
+
+Use the feedback buttons to rate decisions (Too lenient/Just right/Too harsh).
+Feedback is logged to `backend/data/feedback.jsonl`.
 
 ## Troubleshooting
 
@@ -83,14 +91,14 @@ Try these comments:
 **Fix**: Ensure backend is running on port 8000
 
 ### Issue: "No trained model found"
-**Fix**: Complete Step 4 (training) first
+**Fix**: Complete Step 3 (training) first
 
 ## What's Next?
 
 - Read [README.md](README.md) for full documentation
 - Explore the training metrics
 - Modify the reward function
-- Add new features (dashboard, feedback system, etc.)
+- Add new features (dashboard, feedback analytics, etc.)
 
 ## System Requirements
 
@@ -101,5 +109,3 @@ Try these comments:
 - **Time**: ~3-5 hours total (mostly automated)
 
 ---
-
-**Need help?** Check the [README.md](README.md) or open an issue.
