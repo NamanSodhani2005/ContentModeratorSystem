@@ -26,7 +26,7 @@ except Exception:
     TargetSpanToxicityModel = None
 
 
-def main():
+def main(num_samples: int = None):
     print("Starting data preprocessing...")
 
     train_path = DATA_DIR / 'train.csv'
@@ -36,7 +36,7 @@ def main():
         return
 
     print("Loading data...")
-    df = pd.read_csv(train_path, nrows=50000)
+    df = pd.read_csv(train_path, nrows=num_samples)
     comments = df['comment_text'].fillna("").tolist()
 
     toxicity_cols = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
@@ -167,4 +167,9 @@ def main():
         print(f"  Toxicity rate: {labels[:, 0].mean():.2%}")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--num-samples', type=int, default=None,
+                        help='Number of rows to load (default: all)')
+    args = parser.parse_args()
+    main(num_samples=args.num_samples)
