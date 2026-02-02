@@ -1,12 +1,13 @@
 # Content Moderation RL System
 
-A full-stack AI system demonstrating **responsible AI deployment** through Deep Reinforcement Learning for content moderation. Users type comments and receive moderation decisions (keep/warn/remove/temp_ban/perma_ban) with explanations.
+An end-to-end content moderation stack that applies a DQN policy over DistilBERT embeddings with toxicity/target-span features, served via FastAPI and surfaced in a React UI. The system outputs discrete moderation actions (keep/warn/remove/temp_ban/perma_ban) with confidence, reasoning, and Q-value alternatives.
 
 ## Features
 
 - **Deep Q-Network (DQN)** agent with attention-based policy network
 - **Target-aware features** from a target span toxicity model (target presence + hate/offensive/normal probs)
 - **Multi-objective reward function** balancing toxicity reduction, false positives, and user retention
+- **Balanced sampling + reward shaping** to reduce toxic under-moderation
 - **Explainable AI**: attention weights, Q-value transparency, and natural language reasoning
 - **Real-time moderation** via FastAPI backend
 - **Interactive React UI** with toxicity breakdown, alternative actions, and feedback loop
@@ -24,7 +25,7 @@ A full-stack AI system demonstrating **responsible AI deployment** through Deep 
 
 ### Frontend
 - **Framework**: React + Vite
-- **Styling**: Tailwind CSS
+- **Styling**: Custom CSS (minimal monochrome)
 - **HTTP**: Axios
 - **Icons**: Lucide React
 
@@ -219,14 +220,18 @@ Try these examples:
 
 **Reward Function**:
 ```python
-reward = toxicity_reduction
-       - false_positive_penalty
+reward = alignment
+       - over_penalty
+       - under_penalty
        + platform_health_bonus
-       - harsh_action_penalty
 ```
 
 When target features are available, the environment uses target-aware toxicity
 (`target_toxicity.npy`) for reward alignment.
+
+**Sampling**:
+- Toxic examples are oversampled during training (default `toxic_sample_prob=0.5`)
+- Toxicity threshold defaults to `0.5` when building toxic/non-toxic pools
 
 ### Policy Network
 
@@ -398,7 +403,7 @@ python backend/rl_training/train.py
 
 ## Performance Notes
 
-- **Data preprocessing**: ~30 minutes (95K comments)
+- **Data preprocessing**: ~30 minutes (50K comments)
 - **Training**: 2-4 hours on CPU (1000 episodes)
 - **Inference**: ~100ms per comment
 - **GPU support**: Uncomment torch-cuda in requirements.txt

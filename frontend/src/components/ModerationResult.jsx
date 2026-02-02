@@ -16,26 +16,15 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
     setFeedbackState({ status: 'idle', choice: null, error: null, message: null, updated: false });
   }, [result?.decision, comment]);
 
-  const getActionColor = (decision) => { // Define color getter function
-    const colors = { // Define color map
-      keep: 'bg-green-100 text-green-800 border-green-300', // Keep action colors
-      warn: 'bg-yellow-100 text-yellow-800 border-yellow-300', // Warn action colors
-      remove: 'bg-orange-100 text-orange-800 border-orange-300', // Remove action colors
-      temp_ban: 'bg-red-100 text-red-800 border-red-300', // Temp ban colors
-      perma_ban: 'bg-red-200 text-red-900 border-red-400' // Perma ban colors
-    };
-    return colors[decision] || 'bg-gray-100 text-gray-800 border-gray-300'; // Return color or default
-  };
-
   const getActionIcon = (decision) => { // Define icon getter function
     const icons = { // Define icon map
-      keep: <CheckCircle className="w-6 h-6" />, // Keep action icon
-      warn: <AlertTriangle className="w-6 h-6" />, // Warn action icon
-      remove: <X className="w-6 h-6" />, // Remove action icon
-      temp_ban: <Ban className="w-6 h-6" />, // Temp ban icon
-      perma_ban: <XCircle className="w-6 h-6" /> // Perma ban icon
+      keep: <CheckCircle className="icon icon--lg" />, // Keep action icon
+      warn: <AlertTriangle className="icon icon--lg" />, // Warn action icon
+      remove: <X className="icon icon--lg" />, // Remove action icon
+      temp_ban: <Ban className="icon icon--lg" />, // Temp ban icon
+      perma_ban: <XCircle className="icon icon--lg" /> // Perma ban icon
     };
-    return icons[decision] || <Shield className="w-6 h-6" />; // Return icon or default
+    return icons[decision] || <Shield className="icon icon--lg" />; // Return icon or default
   };
 
   const toxicityCategories = [ // Define categories array
@@ -77,47 +66,51 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
   };
 
   return ( // Return JSX
-    <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl mt-6 animate-fade-in"> {/* Main result container */}
+    <div className="card result-card fade-in"> {/* Main result container */}
       {/* Decision Header */}
-      <div className="flex items-center gap-4 mb-6"> {/* Header row */}
-        <div className={`p-3 rounded-full ${getActionColor(result.decision)}`}> {/* Icon container */}
+      <div className="result__header"> {/* Header row */}
+        <div className="decision-badge" data-action={result.decision}> {/* Icon container */}
           {getActionIcon(result.decision)} {/* Render decision icon */}
         </div> {/* Close icon container */}
-        <div> {/* Text container */}
-          <h3 className="text-2xl font-bold text-gray-800 capitalize"> {/* Decision title */}
+        <div className="result__meta"> {/* Text container */}
+          <h3 className="result__title"> {/* Decision title */}
             {result.decision.replace('_', ' ')} {/* Display decision text */}
           </h3> {/* Close title */}
-          <p className="text-sm text-gray-600"> {/* Confidence text */}
+          <p className="result__confidence"> {/* Confidence text */}
             Confidence: {(result.confidence * 100).toFixed(1)}% {/* Display confidence percentage */}
           </p> {/* Close confidence */}
         </div> {/* Close text container */}
       </div> {/* Close header row */}
 
       {/* Reasoning */}
-      <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200"> {/* Reasoning container */}
-        <h4 className="font-semibold text-gray-700 mb-2">Reasoning</h4> {/* Reasoning title */}
-        <p className="text-gray-600">{result.reasoning}</p> {/* Display reasoning text */}
+      <div className="panel"> {/* Reasoning container */}
+        <h4 className="panel__title">Reasoning</h4> {/* Reasoning title */}
+        <p className="text-muted">{result.reasoning}</p> {/* Display reasoning text */}
       </div> {/* Close reasoning container */}
 
       {/* Toxicity Breakdown */}
-      <div className="mb-6"> {/* Toxicity section */}
-        <h4 className="font-semibold text-gray-700 mb-3">Toxicity Analysis</h4> {/* Section title */}
-        <div className="space-y-3"> {/* Categories container */}
+      <div> {/* Toxicity section */}
+        <h4 className="panel__title">Toxicity Analysis</h4> {/* Section title */}
+        <div className="toxicity"> {/* Categories container */}
           {toxicityCategories.map(({ key, label }) => { // Map through categories
             const score = result.toxicity_breakdown[key] || 0; // Get score or zero
             const percentage = (score * 100).toFixed(1); // Calculate percentage
-            const barColor = score > 0.7 ? 'bg-red-500' : score > 0.5 ? 'bg-orange-500' : 'bg-green-500'; // Determine bar color
+            const barColor = score > 0.7
+              ? '#111111'
+              : score > 0.5
+                ? '#6b7280'
+                : '#cbd5e1';
 
             return ( // Return category element
-              <div key={key}> {/* Category container */}
-                <div className="flex justify-between text-sm mb-1"> {/* Label row */}
-                  <span className="text-gray-700">{label}</span> {/* Category label */}
-                  <span className="text-gray-600 font-medium">{percentage}%</span> {/* Score percentage */}
+              <div key={key} className="toxicity__row"> {/* Category container */}
+                <div className="toxicity__label"> {/* Label row */}
+                  <span>{label}</span> {/* Category label */}
+                  <span>{percentage}%</span> {/* Score percentage */}
                 </div> {/* Close label row */}
-                <div className="w-full bg-gray-200 rounded-full h-2"> {/* Progress bar background */}
+                <div className="progress"> {/* Progress bar background */}
                   <div // Progress bar fill
-                    className={`${barColor} h-2 rounded-full transition-all duration-500`} // Bar fill styles
-                    style={{ width: `${percentage}%` }} // Set bar width
+                    className="progress__fill" // Bar fill styles
+                    style={{ width: `${percentage}%`, backgroundColor: barColor }} // Set bar width
                   />
                 </div> {/* Close progress background */}
               </div> // Close category container
@@ -127,65 +120,64 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
       </div> {/* Close toxicity section */}
 
       {/* Feedback */}
-      <div className="mb-6"> {/* Feedback section */}
-        <h4 className="font-semibold text-gray-700 mb-3">Was this decision fair?</h4> {/* Section title */}
-        <div className="flex flex-wrap gap-2"> {/* Button row */}
+      <div> {/* Feedback section */}
+        <h4 className="panel__title">Was this decision fair?</h4> {/* Section title */}
+        <div className="feedback__buttons"> {/* Button row */}
           {feedbackOptions.map((option) => { // Map feedback options
             const isSelected = feedbackState.choice === option.key; // Selected state
-            const baseClasses = 'px-3 py-2 rounded-lg border text-sm font-medium transition-colors';
-            const stateClasses = isSelected
-              ? 'bg-purple-50 border-purple-300 text-purple-700'
-              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50';
-            const disabledClasses = !canSendFeedback || isSubmitting ? 'opacity-60 cursor-not-allowed' : '';
+            const isDisabled = !canSendFeedback || isSubmitting;
+            const buttonClass = [
+              'feedback__button',
+              isSelected ? 'is-selected' : '',
+              isDisabled ? 'is-disabled' : ''
+            ].filter(Boolean).join(' ');
 
             return ( // Return feedback button
               <button
                 key={option.key}
                 type="button"
                 onClick={() => handleFeedback(option.key)}
-                disabled={!canSendFeedback || isSubmitting}
-                className={`${baseClasses} ${stateClasses} ${disabledClasses}`}
+                disabled={isDisabled}
+                className={buttonClass}
               >
                 {option.label}
               </button>
             );
           })}
         </div> {/* Close button row */}
-        <p className="text-xs text-gray-500 mt-2">Your feedback updates the model online.</p> {/* Helper text */}
+        <p className="feedback__note">Your feedback updates the model online.</p> {/* Helper text */}
         {feedbackState.status === 'success' && feedbackState.message && ( // Success message
-          <p className={`text-sm mt-2 ${feedbackState.updated ? 'text-green-700' : 'text-gray-600'}`}>
+          <p className={`feedback__message ${feedbackState.updated ? 'feedback__message--ok' : 'feedback__message--info'}`}>
             {feedbackState.message}
           </p>
         )}
         {feedbackState.status === 'error' && ( // Error message
-          <p className="text-sm text-red-600 mt-2">{feedbackState.error}</p>
+          <p className="feedback__message feedback__message--error">{feedbackState.error}</p>
         )}
       </div> {/* Close feedback section */}
 
       {/* Alternative Actions */}
       <div> {/* Alternatives section */}
-        <h4 className="font-semibold text-gray-700 mb-3">Alternative Actions (by Q-value)</h4> {/* Section title */}
-        <div className="space-y-2"> {/* Actions container */}
+        <h4 className="panel__title">Alternative Actions (by Q-value)</h4> {/* Section title */}
+        <div className="alt-actions"> {/* Actions container */}
           {result.alternative_actions.slice(0, 3).map((alt) => { // Map top 3 alternatives
             const isChosen = alt.action === result.decision; // Check chosen action
             return ( // Return action row
               <div // Action row
                 key={alt.action} // Unique key
-                className={`flex justify-between items-center p-3 rounded-lg border ${ // Row base styles
-                  isChosen ? 'bg-purple-50 border-purple-300' : 'bg-gray-50 border-gray-200' // Conditional styling
-                }`}
+                className={`alt-action ${isChosen ? 'is-selected' : ''}`} // Row base styles
               >
-                <div className="flex items-center gap-2"> {/* Left side */}
-                  {isChosen && <span className="text-xs font-bold text-purple-700">CHOSEN</span>} {/* Show chosen badge */}
-                  <span className="font-medium text-gray-800 capitalize"> {/* Action name */}
+                <div className="alt-action__left"> {/* Left side */}
+                  {isChosen && <span className="badge">CHOSEN</span>} {/* Show chosen badge */}
+                  <span> {/* Action name */}
                     {alt.action.replace('_', ' ')} {/* Display action text */}
                   </span> {/* Close action name */}
                 </div> {/* Close left side */}
-                <div className="flex items-center gap-4"> {/* Right side */}
-                  <span className="text-sm text-gray-600"> {/* Q-value label */}
+                <div className="alt-action__meta"> {/* Right side */}
+                  <span> {/* Q-value label */}
                     Q: {alt.q_value.toFixed(3)} {/* Display Q-value */}
                   </span> {/* Close Q-value */}
-                  <span className="text-sm text-gray-600"> {/* Probability label */}
+                  <span> {/* Probability label */}
                     P: {(alt.probability * 100).toFixed(1)}% {/* Display probability */}
                   </span> {/* Close probability */}
                 </div> {/* Close right side */}

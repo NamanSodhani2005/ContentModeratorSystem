@@ -11,6 +11,8 @@ npm install
 cd ..
 ```
 
+Frontend styling is pure CSS (no Tailwind or PostCSS setup required).
+
 ## Step 2: Provide Training Data
 
 Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
@@ -37,6 +39,8 @@ Recommended one-shot pipeline:
 ```bash
 python run.py train
 ```
+
+Training uses balanced sampling and reward shaping by default to reduce toxic under-moderation.
 
 Or run the full pipeline directly:
 

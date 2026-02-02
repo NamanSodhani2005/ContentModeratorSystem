@@ -22,7 +22,17 @@ class ForumEnvironment(gym.Env):
     metadata = {'render_modes': []}
 
     # Set up spaces, counters, and initial state for the moderation environment.
-    def __init__(self, embeddings, labels, hate_scores=None, target_features=None, target_toxicity=None, max_steps=500):
+    def __init__(
+        self,
+        embeddings,
+        labels,
+        hate_scores=None,
+        target_features=None,
+        target_toxicity=None,
+        max_steps=500,
+        toxic_sample_prob=0.5,
+        toxicity_threshold=0.5
+    ):
         super().__init__()
 
         self.embeddings = embeddings
@@ -33,6 +43,10 @@ class ForumEnvironment(gym.Env):
         self.max_steps = max_steps
         self.hate_score_dim = 3
         self.target_feature_dim = 4
+        self.toxic_sample_prob = toxic_sample_prob
+        self.toxicity_threshold = toxicity_threshold
+        self.toxic_indices = None
+        self.non_toxic_indices = None
 
         self.state_dim = 768 + self.hate_score_dim + self.target_feature_dim + 10 + 5  # state size
         self.observation_space = spaces.Box(
@@ -52,10 +66,26 @@ class ForumEnvironment(gym.Env):
 
         self.user_history = np.zeros(10)
 
+        if self.labels is not None:
+            label_max = self.labels.max(axis=1) if self.labels.ndim > 1 else self.labels
+            toxic_mask = label_max >= self.toxicity_threshold
+            self.toxic_indices = np.where(toxic_mask)[0]
+            self.non_toxic_indices = np.where(~toxic_mask)[0]
+            if len(self.toxic_indices) == 0 or len(self.non_toxic_indices) == 0:
+                self.toxic_sample_prob = 0.0
+
         if self.target_toxicity is not None and len(self.target_toxicity) != len(self.embeddings):
             raise ValueError("target_toxicity must have the same length as embeddings")
 
         self.reset()
+
+    # Sample an index with optional toxic oversampling.
+    def _sample_index(self):
+        if self.toxic_indices is None or self.non_toxic_indices is None:
+            return np.random.randint(0, len(self.embeddings))
+        if np.random.rand() < self.toxic_sample_prob:
+            return np.random.choice(self.toxic_indices)
+        return np.random.choice(self.non_toxic_indices)
 
     # Reset counters, sample a comment, and return the initial state.
     def reset(self, seed=None, options=None):
@@ -80,7 +110,7 @@ class ForumEnvironment(gym.Env):
             5.0
         ])
 
-        self.current_idx = np.random.randint(0, len(self.embeddings))  # sample comment
+        self.current_idx = self._sample_index()  # sample comment
         self.current_embedding = self.embeddings[self.current_idx]
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
@@ -132,7 +162,7 @@ class ForumEnvironment(gym.Env):
         reward = self._calculate_reward(action, toxicity_score)
         self._update_state(action, toxicity_score)
 
-        self.current_idx = np.random.randint(0, len(self.embeddings))  # sample comment
+        self.current_idx = self._sample_index()  # sample comment
         self.current_embedding = self.embeddings[self.current_idx]
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
@@ -165,7 +195,16 @@ class ForumEnvironment(gym.Env):
         action_severity = action / 4.0
         alignment = 1.0 - abs(toxicity_score - action_severity)
         over_penalty = 0.5 * max(0.0, action_severity - toxicity_score)
-        reward = alignment - over_penalty
+
+        under_penalty = 0.0
+        if toxicity_score >= 0.7 and action <= ModerationAction.WARN:
+            under_penalty += 0.75
+        elif toxicity_score >= 0.5 and action == ModerationAction.KEEP:
+            under_penalty += 0.5
+        if toxicity_score <= 0.2 and action >= ModerationAction.TEMP_BAN:
+            over_penalty += 0.35
+
+        reward = alignment - over_penalty - under_penalty
 
         reward += 0.1 * self.platform_health  # health bonus
 
