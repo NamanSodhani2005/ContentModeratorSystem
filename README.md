@@ -230,8 +230,8 @@ When target features are available, the environment uses target-aware toxicity
 (`target_toxicity.npy`) for reward alignment.
 
 **Sampling**:
-- Toxic examples are oversampled during training (default `toxic_sample_prob=0.5`)
-- Toxicity threshold defaults to `0.5` when building toxic/non-toxic pools
+- Toxic examples are oversampled during training (default `toxic_sample_prob=0.35`)
+- Toxicity threshold defaults to `0.6` when building toxic/non-toxic pools
 
 ### Policy Network
 

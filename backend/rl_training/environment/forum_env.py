@@ -30,8 +30,8 @@ class ForumEnvironment(gym.Env):
         target_features=None,
         target_toxicity=None,
         max_steps=500,
-        toxic_sample_prob=0.5,
-        toxicity_threshold=0.5
+        toxic_sample_prob=0.35,
+        toxicity_threshold=0.6
     ):
         super().__init__()
 
@@ -197,12 +197,24 @@ class ForumEnvironment(gym.Env):
         over_penalty = 0.5 * max(0.0, action_severity - toxicity_score)
 
         under_penalty = 0.0
-        if toxicity_score >= 0.7 and action <= ModerationAction.WARN:
-            under_penalty += 0.75
-        elif toxicity_score >= 0.5 and action == ModerationAction.KEEP:
-            under_penalty += 0.5
-        if toxicity_score <= 0.2 and action >= ModerationAction.TEMP_BAN:
-            over_penalty += 0.35
+        if toxicity_score >= 0.85:
+            if action == ModerationAction.KEEP:
+                under_penalty += 0.6
+            elif action == ModerationAction.WARN:
+                under_penalty += 0.35
+        elif toxicity_score >= 0.7:
+            if action == ModerationAction.KEEP:
+                under_penalty += 0.35
+            elif action == ModerationAction.WARN:
+                under_penalty += 0.2
+
+        if toxicity_score <= 0.2:
+            if action >= ModerationAction.TEMP_BAN:
+                over_penalty += 0.8
+            elif action == ModerationAction.REMOVE:
+                over_penalty += 0.35
+        elif toxicity_score <= 0.35 and action >= ModerationAction.TEMP_BAN:
+            over_penalty += 0.45
 
         reward = alignment - over_penalty - under_penalty
 
