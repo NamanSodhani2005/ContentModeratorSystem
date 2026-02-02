@@ -352,16 +352,6 @@ Final Statistics:
   Final false positive rate: 0.043
 ```
 
-## Future Extensions
-
-- [ ] Dashboard with training metrics visualization (Recharts)
-- [ ] Simulation panel showing long-term platform effects
-- [ ] Feedback persistence (database + moderation audit trail)
-- [ ] Target span visualization in the UI
-- [ ] Constrained RL version (Lagrangian or CPO)
-- [ ] Fairness auditing with demographic data
-- [ ] Database for persistent decision storage
-
 ## Troubleshooting
 
 ### Backend won't start
