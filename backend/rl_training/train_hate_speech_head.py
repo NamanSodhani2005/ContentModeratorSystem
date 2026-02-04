@@ -32,16 +32,16 @@ LABEL_MAP = {
 class EmbeddingDataset(Dataset):
     """Embeddings dataset."""
 
-    # Store embeddings and labels for indexing by DataLoader.
+
     def __init__(self, embeddings, labels):
         self.embeddings = embeddings
         self.labels = labels
 
-    # Return dataset size for DataLoader iteration.
+
     def __len__(self):
         return len(self.embeddings)
 
-    # Fetch one embedding and label pair as tensors.
+
     def __getitem__(self, idx):
         return (
             torch.tensor(self.embeddings[idx], dtype=torch.float32),
@@ -49,9 +49,9 @@ class EmbeddingDataset(Dataset):
         )
 
 
-# Create train and validation indices, stratified when multiple labels exist.
+
 def split_indices(labels, val_ratio, seed):
-    rng = np.random.default_rng(seed)  # rng
+    rng = np.random.default_rng(seed)
     labels = np.asarray(labels)
     indices = np.arange(len(labels))
 
@@ -75,12 +75,12 @@ def split_indices(labels, val_ratio, seed):
     return np.array(train_idx), np.array(val_idx)
 
 
-# Encode texts with DistilBERT and return CLS embeddings in batches.
+
 def compute_embeddings(texts, batch_size=32, max_length=128, device="cpu"):
-    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")  # tokenizer
-    model = DistilBertModel.from_pretrained("distilbert-base-uncased")  # encoder
+    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+    model = DistilBertModel.from_pretrained("distilbert-base-uncased")
     model.to(device)
-    model.eval()  # eval mode
+    model.eval()
 
     embeddings = []
     for idx in tqdm(range(0, len(texts), batch_size), desc="Embedding tweets"):
@@ -94,23 +94,23 @@ def compute_embeddings(texts, batch_size=32, max_length=128, device="cpu"):
                 return_tensors="pt"
             ).to(device)
             outputs = model(**inputs)
-            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS vector
+            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
             embeddings.append(batch_embeddings)
 
     return np.vstack(embeddings)
 
 
-# Load cached embeddings or compute and save them from the dataset.
+
 def load_or_create_embeddings(device, batch_size=32, max_length=128):
     if EMBEDDINGS_PATH.exists() and LABELS_PATH.exists():
-        embeddings = np.load(EMBEDDINGS_PATH)  # cached embeddings
-        labels = np.load(LABELS_PATH)  # cached labels
+        embeddings = np.load(EMBEDDINGS_PATH)
+        labels = np.load(LABELS_PATH)
         return embeddings, labels
 
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"Missing dataset at {DATA_PATH}")
 
-    df = pd.read_csv(DATA_PATH)  # load csv
+    df = pd.read_csv(DATA_PATH)
     if "tweet" not in df.columns or "class" not in df.columns:
         raise ValueError("Expected columns 'tweet' and 'class' in labeled_data.csv")
 
@@ -125,9 +125,9 @@ def load_or_create_embeddings(device, batch_size=32, max_length=128):
     return embeddings, labels
 
 
-# Train the classification head and save model weights and config.
+
 def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # select device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     embeddings, labels = load_or_create_embeddings(
         device=device,
@@ -135,7 +135,7 @@ def train(args):
         max_length=args.max_length
     )
 
-    train_idx, val_idx = split_indices(labels, args.val_ratio, args.seed)  # stratified split
+    train_idx, val_idx = split_indices(labels, args.val_ratio, args.seed)
     train_ds = EmbeddingDataset(embeddings[train_idx], labels[train_idx])
     val_ds = EmbeddingDataset(embeddings[val_idx], labels[val_idx])
 
@@ -144,8 +144,8 @@ def train(args):
 
     model = HateSpeechHead(input_dim=embeddings.shape[1])
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)  # optimizer
-    criterion = torch.nn.CrossEntropyLoss()  # loss fn
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    criterion = torch.nn.CrossEntropyLoss()
 
     interrupted = False
     try:
@@ -186,13 +186,13 @@ def train(args):
         print("\nTraining interrupted by user. Saving model so far...")
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), MODEL_PATH)  # save model
+    torch.save(model.state_dict(), MODEL_PATH)
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         handle.write(
             '{"labels": {"0": "hate_speech", "1": "offensive_language", "2": "neither"}, '
             '"input_dim": %d}\n' % embeddings.shape[1]
-        )  # save config
+        )
 
     if interrupted:
         print(f"Saved hate speech head (partial training) to: {MODEL_PATH}")
@@ -200,7 +200,7 @@ def train(args):
         print(f"Saved hate speech head to: {MODEL_PATH}")
 
 
-# Parse CLI arguments for training options.
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train hate speech head on frozen embeddings.")
     parser.add_argument("--epochs", type=int, default=3)

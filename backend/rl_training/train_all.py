@@ -23,7 +23,7 @@ EMBEDDINGS_PATH = Path("backend/data/embeddings.npy")
 LABELS_PATH = Path("backend/data/labels.npy")
 
 
-# Run the full training pipeline with optional stages and preprocessing.
+
 def train_all():
     print("=" * 60)
     print("FULL TRAINING PIPELINE")
@@ -74,14 +74,14 @@ def train_all():
         print("Step 2: Skipping target span model (no HateXplain or labeled_data found).")
 
     print("Step 3: Preprocessing embeddings...")
-    preprocess_main()  # build embeddings
+    preprocess_main()
 
     if not EMBEDDINGS_PATH.exists() or not LABELS_PATH.exists():
         print("Error: embeddings or labels not found after preprocessing.")
         return
 
     print("Step 4: Training DQN agent...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"  # select device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     train_dqn(
         embeddings_path=str(EMBEDDINGS_PATH),
         labels_path=str(LABELS_PATH),

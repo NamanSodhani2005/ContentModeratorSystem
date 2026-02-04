@@ -53,7 +53,7 @@ JIGSAW_LABEL_COLS = [
 ]
 
 
-# Read a CSV file with an optional separator and return a DataFrame or None.
+
 def read_csv(path, sep=None):
     if not path.exists():
         return None
@@ -66,7 +66,7 @@ def read_csv(path, sep=None):
             return None
 
 
-# Clean raw text: remove user mentions, URLs, flair tags, collapse whitespace.
+
 def clean_text(text):
     if not text or not isinstance(text, str):
         return ""
@@ -79,13 +79,13 @@ def clean_text(text):
     return text
 
 
-# Normalize text for deduping and counting.
+
 def normalize_text(text):
     text = "" if text is None else str(text)
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-# Tokenize text into words with offsets.
+
 def simple_tokenize_with_offsets(text):
     tokens = []
     offsets = []
@@ -95,14 +95,14 @@ def simple_tokenize_with_offsets(text):
     return tokens, offsets
 
 
-# Extract n-gram tuples from tokens.
+
 def extract_ngrams(tokens, max_ngram):
     for n in range(1, max_ngram + 1):
         for i in range(len(tokens) - n + 1):
             yield tuple(tokens[i:i + n])
 
 
-# Add examples with dedupe and label merge.
+
 def add_examples(texts, labels, seen, new_texts, new_labels):
     for text, label in zip(new_texts, new_labels):
         key = normalize_text(text)
@@ -118,13 +118,13 @@ def add_examples(texts, labels, seen, new_texts, new_labels):
         labels.append(int(label))
 
 
-# Merge group text maps into one dictionary.
+
 def merge_group_texts(dest, source):
     for group, items in source.items():
         dest[group].extend(items)
 
 
-# Convert sentiment string to a binary toxicity label.
+
 def sentiment_to_toxic(sentiment):
     if sentiment is None:
         return 0
@@ -135,7 +135,7 @@ def sentiment_to_toxic(sentiment):
     return 0 if all(p == "normal" for p in parts) else 1
 
 
-# Load hate speech dataset and return texts and labels.
+
 def load_hate_speech_dataset(path):
     df = read_csv(path)
     if df is None:
@@ -147,7 +147,7 @@ def load_hate_speech_dataset(path):
     return texts, labels
 
 
-# Load Jigsaw dataset and return texts and labels.
+
 def load_jigsaw_dataset(path):
     df = read_csv(path)
     if df is None:
@@ -162,7 +162,7 @@ def load_jigsaw_dataset(path):
     return texts, labels
 
 
-# Load Ethos binary dataset and return texts and labels.
+
 def load_ethos_binary(path):
     df = read_csv(path, sep=";")
     if df is None:
@@ -174,7 +174,7 @@ def load_ethos_binary(path):
     return texts, labels
 
 
-# Load Ethos multi-label dataset with group labels for lexicon mining.
+
 def load_ethos_multi(path, threshold):
     df = read_csv(path, sep=";")
     if df is None:
@@ -204,7 +204,7 @@ def load_ethos_multi(path, threshold):
     return texts, labels, group_texts
 
 
-# Load dataset with target group labels for lexicon mining.
+
 def load_en_dataset(path):
     df = read_csv(path)
     if df is None:
@@ -231,7 +231,7 @@ def load_en_dataset(path):
     return texts, labels, group_texts
 
 
-# Load HateCheck test cases and target identities for lexicon mining.
+
 def load_hatecheck_dataset(path):
     df = read_csv(path)
     if df is None:
@@ -253,7 +253,7 @@ def load_hatecheck_dataset(path):
     return group_texts
 
 
-# Load unlabeled comments for extra lexicon context.
+
 def load_comments_texts(path):
     if not path.exists():
         return []
@@ -266,7 +266,7 @@ def load_comments_texts(path):
     return texts
 
 
-# Build a group-aware lexicon from labeled texts.
+
 def build_group_lexicon(group_texts, all_texts, max_ngram, min_count, min_precision, top_k):
     global_counts = Counter()
     for text in tqdm(all_texts, desc="Counting global ngrams"):
@@ -310,7 +310,7 @@ def build_group_lexicon(group_texts, all_texts, max_ngram, min_count, min_precis
     return lexicon
 
 
-# Save lexicon terms to JSON for reuse.
+
 def save_lexicon(path, lexicon):
     data = {" ".join(term): score for term, score in lexicon.items()}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +318,7 @@ def save_lexicon(path, lexicon):
         json.dump(data, handle, indent=2, sort_keys=True)
 
 
-# Load lexicon terms from JSON into token tuples.
+
 def load_lexicon(path):
     if not path.exists():
         return {}
@@ -331,7 +331,7 @@ def load_lexicon(path):
     return lexicon
 
 
-# Load Measuring Hate Speech dataset with continuous scores mapped to 3-class.
+
 def load_measuring_hs(path):
     df = read_csv(path)
     if df is None:
@@ -355,7 +355,7 @@ def load_measuring_hs(path):
     return texts, labels
 
 
-# Load SBIC dataset with continuous offensiveness mapped to 3-class.
+
 def load_sbic(path):
     df = read_csv(path)
     if df is None:
@@ -372,15 +372,15 @@ def load_sbic(path):
             continue
         texts.append(text)
         if off >= 0.75 and intent_val >= 0.5:
-            labels.append(0)  # hate
+            labels.append(0)
         elif off >= 0.5:
-            labels.append(1)  # offensive
+            labels.append(1)
         else:
-            labels.append(2)  # normal
+            labels.append(2)
     return texts, labels
 
 
-# Load HateXplain dataset with human-annotated rationale spans and 3-class labels.
+
 def load_hatexplain_dataset(path, tokenizer, max_length=128):
     if not path.exists():
         return [], [], []
@@ -400,7 +400,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
         if not post_tokens:
             continue
 
-        # Majority-vote label across annotators
+
         annotators = entry.get("annotators", [])
         if not annotators:
             continue
@@ -408,7 +408,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
         majority_label = label_votes.most_common(1)[0][0]
         tox_label = label_map.get(majority_label, 2)
 
-        # Majority-vote rationale spans (per-token binary across annotators)
+
         rationales = entry.get("rationales", [])
         if rationales:
             rationale_sum = np.zeros(len(post_tokens), dtype=np.float32)
@@ -419,7 +419,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
         else:
             word_rationale = np.zeros(len(post_tokens), dtype=int)
 
-        # Filter out noise tokens (e.g. <user>) along with their rationale
+
         clean_tokens = []
         clean_rationale = []
         for i, tok in enumerate(post_tokens):
@@ -436,7 +436,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
         if len(text.split()) < 3:
             continue
 
-        # Align word-level rationale to subword tokens via offset mapping
+
         encoding = tokenizer(
             text,
             padding="max_length",
@@ -446,7 +446,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
         )
         offsets = encoding["offset_mapping"]
 
-        # Build character-level rationale from word boundaries
+
         char_rationale = np.zeros(len(text) + 1, dtype=int)
         pos = 0
         for i, word in enumerate(clean_tokens):
@@ -474,7 +474,7 @@ def load_hatexplain_dataset(path, tokenizer, max_length=128):
 class TargetSpanDataset(Dataset):
     """Weak label dataset."""
 
-    # Store texts, labels, and tokenizer settings for sampling.
+
     def __init__(self, texts, token_labels, toxicity_labels, tokenizer, max_length=128):
         self.texts = texts
         self.token_labels = token_labels
@@ -482,11 +482,11 @@ class TargetSpanDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
-    # Return dataset size for DataLoader iteration.
+
     def __len__(self):
         return len(self.texts)
 
-    # Tokenize text and return tensors with weak labels.
+
     def __getitem__(self, idx):
         text = self.texts[idx]
         encoding = self.tokenizer(
@@ -512,7 +512,7 @@ class TargetSpanDataset(Dataset):
         }
 
 
-# Generate weak token labels by matching lexicon spans in text.
+
 def generate_weak_token_labels(text, tokenizer, lexicon, max_ngram, max_length=128):
     encoding = tokenizer(
         text,
@@ -560,19 +560,19 @@ def generate_weak_token_labels(text, tokenizer, lexicon, max_ngram, max_length=1
     return labels
 
 
-# Train the target-span model using data-driven weak labels.
+
 def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # select device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")  # tokenizer
+    tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
 
     texts = []
     toxicity_labels = []
     all_token_labels = []
     seen = {}
 
-    # Primary: HateXplain with human rationale spans and 3-class labels
+
     hatexplain_path = getattr(args, "hatexplain_path", HATEXPLAIN_PATH)
     hx_texts, hx_token_labels, hx_tox_labels = load_hatexplain_dataset(
         Path(hatexplain_path), tokenizer, max_length=args.max_length
@@ -588,7 +588,7 @@ def train(args):
     covered_hx = sum(1 for tl in hx_token_labels if any(v == 1 for v in tl))
     print(f"Loaded {len(hx_texts)} from HateXplain ({covered_hx} with rationale spans)")
 
-    # Supplementary datasets mapped to 3-class (toxic→offensive=1, non-toxic→normal=2)
+
     num_tox_classes = getattr(args, "num_tox_classes", 3)
     group_texts = defaultdict(list)
 
@@ -604,9 +604,9 @@ def train(args):
                 continue
             seen[key] = len(texts)
             texts.append(text)
-            # Map: toxic(1) → offensive(1), non-toxic(0) → normal(2)
+
             toxicity_labels.append(1 if label else 2)
-            # Weak token labels (no rationale spans for supplementary data)
+
             tok_labels = generate_weak_token_labels(
                 text, tokenizer, lexicon, args.max_ngram, max_length=args.max_length
             )
@@ -634,7 +634,7 @@ def train(args):
             added += 1
         return added
 
-    # Build lexicon for supplementary weak labeling
+
     hate_texts, hate_labels = load_hate_speech_dataset(HATE_SPEECH_PATH)
     archive_texts, archive_labels = load_hate_speech_dataset(HATE_SPEECH_ARCHIVE_PATH)
     ethos_multi_texts, ethos_multi_labels, ethos_groups = load_ethos_multi(
@@ -667,7 +667,7 @@ def train(args):
         save_lexicon(LEXICON_PATH, lexicon)
         print(f"Saved lexicon with {len(lexicon)} terms")
 
-    # Add supplementary datasets
+
     n = add_supplementary(hate_texts, hate_labels)
     print(f"Added {n} supplementary from hate-speech dataset")
     n = add_supplementary(archive_texts, archive_labels)
@@ -713,8 +713,8 @@ def train(args):
     val_token_labels = [all_token_labels[i] for i in val_idx]
     val_toxicity = [toxicity_labels[i] for i in val_idx]
 
-    train_dataset = TargetSpanDataset(train_texts, train_token_labels, train_toxicity, tokenizer, args.max_length)  # train set
-    val_dataset = TargetSpanDataset(val_texts, val_token_labels, val_toxicity, tokenizer, args.max_length)  # val set
+    train_dataset = TargetSpanDataset(train_texts, train_token_labels, train_toxicity, tokenizer, args.max_length)
+    val_dataset = TargetSpanDataset(val_texts, val_token_labels, val_toxicity, tokenizer, args.max_length)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
@@ -723,10 +723,10 @@ def train(args):
     model = TargetSpanToxicityModel(num_tox_classes=num_tox_classes)
     model.to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)  # optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     total_steps = len(train_loader) * args.epochs
-    warmup_steps = len(train_loader)  # 1 epoch warmup
+    warmup_steps = len(train_loader)
 
     def lr_lambda(step):
         if step < warmup_steps:
@@ -764,7 +764,7 @@ def train(args):
                 loss = outputs["loss"]
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # clip grads
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
 
@@ -819,7 +819,7 @@ def train(args):
     if best_state is None:
         best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    torch.save(model.state_dict(), MODEL_PATH)  # save best model
+    torch.save(model.state_dict(), MODEL_PATH)
     if interrupted:
         print(f"Saved best model so far to {MODEL_PATH}")
     else:
@@ -853,7 +853,7 @@ def train(args):
                 print(f"  '{text}' -> toxic_prob={toxic_prob:.3f}")
 
 
-# Parse CLI arguments for training options.
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train TargetSpanToxicityModel")
     parser.add_argument("--epochs", type=int, default=10)

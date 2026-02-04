@@ -16,7 +16,7 @@ from rl_training.models.policy_network import PolicyNetwork
 from rl_training.agents.dqn_agent import DQNAgent
 
 
-# Run the DQN training loop over episodes, saving checkpoints and metrics.
+
 def train(
     embeddings_path='backend/data/embeddings.npy',
     labels_path='backend/data/labels.npy',
@@ -34,8 +34,8 @@ def train(
     print("=" * 60)
 
     print("\nLoading data...")
-    embeddings = np.load(embeddings_path)  # load embeddings
-    labels = np.load(labels_path)  # load labels
+    embeddings = np.load(embeddings_path)
+    labels = np.load(labels_path)
     hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
     target_features = np.load(target_features_path) if os.path.exists(target_features_path) else None
     target_toxicity = np.load(target_toxicity_path) if os.path.exists(target_toxicity_path) else None
@@ -115,7 +115,7 @@ def train(
                     break
 
             if episode % 10 == 0:
-                agent.update_target_network(tau=0.005)  # sync target
+                agent.update_target_network(tau=0.005)
 
             agent.decay_epsilon()
 
@@ -140,7 +140,7 @@ def train(
                 save_dir = Path('backend/saved_models')
                 save_dir.mkdir(exist_ok=True)
                 save_path = save_dir / f'dqn_checkpoint_ep{episode}.pt'
-                agent.save(save_path)  # checkpoint
+                agent.save(save_path)
     except KeyboardInterrupt:
         interrupted = True
         print("\nTraining interrupted by user. Saving current model and stats...")
@@ -155,10 +155,10 @@ def train(
     save_dir = Path('backend/saved_models')
     save_dir.mkdir(exist_ok=True)
     final_path = save_dir / 'dqn_final.pt'
-    agent.save(final_path)  # save model
+    agent.save(final_path)
 
     stats_path = save_dir / 'training_stats.npz'
-    np.savez(stats_path, **training_stats)  # save stats
+    np.savez(stats_path, **training_stats)
     print(f"Training statistics saved to {stats_path}")
 
     if training_stats['episode_rewards']:
@@ -172,9 +172,9 @@ def train(
         print("\nNo completed episodes to summarize.")
 
 
-# Select device, validate data files, and start training.
+
 def main():
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # select device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
     embeddings_path = 'backend/data/embeddings.npy'

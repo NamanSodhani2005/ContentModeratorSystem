@@ -21,7 +21,7 @@ class ForumEnvironment(gym.Env):
 
     metadata = {'render_modes': []}
 
-    # Set up spaces, counters, and initial state for the moderation environment.
+
     def __init__(
         self,
         embeddings,
@@ -48,7 +48,7 @@ class ForumEnvironment(gym.Env):
         self.toxic_indices = None
         self.non_toxic_indices = None
 
-        self.state_dim = 768 + self.hate_score_dim + self.target_feature_dim + 10 + 5  # state size
+        self.state_dim = 768 + self.hate_score_dim + self.target_feature_dim + 10 + 5
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -79,7 +79,7 @@ class ForumEnvironment(gym.Env):
 
         self.reset()
 
-    # Sample an index with optional toxic oversampling.
+
     def _sample_index(self):
         if self.toxic_indices is None or self.non_toxic_indices is None:
             return np.random.randint(0, len(self.embeddings))
@@ -87,7 +87,7 @@ class ForumEnvironment(gym.Env):
             return np.random.choice(self.toxic_indices)
         return np.random.choice(self.non_toxic_indices)
 
-    # Reset counters, sample a comment, and return the initial state.
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
@@ -110,7 +110,7 @@ class ForumEnvironment(gym.Env):
             5.0
         ])
 
-        self.current_idx = self._sample_index()  # sample comment
+        self.current_idx = self._sample_index()
         self.current_embedding = self.embeddings[self.current_idx]
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
@@ -129,7 +129,7 @@ class ForumEnvironment(gym.Env):
         state = self._get_state()
         return state, {}
 
-    # Build the state vector from embeddings, context, and platform metrics.
+
     def _get_state(self):
         platform_metrics = np.array([
             self.platform_health,
@@ -149,7 +149,7 @@ class ForumEnvironment(gym.Env):
 
         return state
 
-    # Apply an action, compute reward, update state, and sample next comment.
+
     def step(self, action):
         self.current_step += 1
         self.total_actions += 1
@@ -162,7 +162,7 @@ class ForumEnvironment(gym.Env):
         reward = self._calculate_reward(action, toxicity_score)
         self._update_state(action, toxicity_score)
 
-        self.current_idx = self._sample_index()  # sample comment
+        self.current_idx = self._sample_index()
         self.current_embedding = self.embeddings[self.current_idx]
         self.current_toxicity = self.labels[self.current_idx] if self.labels is not None else np.random.rand(6)
         if self.hate_scores is not None:
@@ -178,7 +178,7 @@ class ForumEnvironment(gym.Env):
         else:
             self.current_target_toxicity = None
 
-        done = self.current_step >= self.max_steps or self.platform_health <= 0.3  # episode end
+        done = self.current_step >= self.max_steps or self.platform_health <= 0.3
 
         state = self._get_state()
         info = {
@@ -190,7 +190,7 @@ class ForumEnvironment(gym.Env):
 
         return state, reward, done, False, info
 
-    # Compute continuous alignment reward based on toxicity score and action severity.
+
     def _calculate_reward(self, action, toxicity_score):
         action_severity = action / 4.0
         alignment = 1.0 - abs(toxicity_score - action_severity)
@@ -218,11 +218,11 @@ class ForumEnvironment(gym.Env):
 
         reward = alignment - over_penalty - under_penalty
 
-        reward += 0.1 * self.platform_health  # health bonus
+        reward += 0.1 * self.platform_health
 
         return reward
 
-    # Update user history and platform metrics based on action and toxicity.
+
     def _update_state(self, action, toxicity_score):
         if action == ModerationAction.WARN:
             self.user_history[1] += 1
@@ -245,13 +245,13 @@ class ForumEnvironment(gym.Env):
         else:
             self.user_satisfaction -= 0.01
 
-        self.platform_health = np.clip(self.platform_health, 0.0, 1.0)  # clamp health
-        self.user_satisfaction = np.clip(self.user_satisfaction, 0.0, 1.0)  # clamp satisfaction
+        self.platform_health = np.clip(self.platform_health, 0.0, 1.0)
+        self.user_satisfaction = np.clip(self.user_satisfaction, 0.0, 1.0)
 
-    # No rendering implemented for this environment.
+
     def render(self):
         pass
 
-    # No cleanup needed for this environment.
+
     def close(self):
         pass

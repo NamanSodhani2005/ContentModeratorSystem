@@ -1,29 +1,29 @@
-import axios from 'axios'; // Import HTTP client
+import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000'; // Define backend URL
+const API_BASE_URL = 'http://localhost:8000';
 
-export const moderateComment = async (comment) => { // Export moderation function
-  const response = await axios.post(`${API_BASE_URL}/api/moderate`, { // Send POST request
-    comment // Pass comment text
+export const moderateComment = async (comment) => {
+  const response = await axios.post(`${API_BASE_URL}/api/moderate`, {
+    comment
   });
-  return response.data; // Return response data
+  return response.data;
 };
 
-export const getMetrics = async () => { // Export metrics function
-  const response = await axios.get(`${API_BASE_URL}/api/metrics`); // Fetch metrics endpoint
-  return response.data; // Return metrics data
+export const getMetrics = async () => {
+  const response = await axios.get(`${API_BASE_URL}/api/metrics`);
+  return response.data;
 };
 
-export const getExamples = async () => { // Export examples function
-  const response = await axios.get(`${API_BASE_URL}/api/examples`); // Fetch examples endpoint
-  return response.data; // Return examples data
+export const getExamples = async () => {
+  const response = await axios.get(`${API_BASE_URL}/api/examples`);
+  return response.data;
 };
 
-export const submitFeedback = async (comment, decision, feedback) => { // Export feedback function
-  const response = await axios.post(`${API_BASE_URL}/api/feedback`, { // Send feedback request
-    comment, // Original comment text
-    decision, // Decision string
-    feedback // Feedback label
+export const submitFeedback = async (comment, decision, feedback) => {
+  const response = await axios.post(`${API_BASE_URL}/api/feedback`, {
+    comment,
+    decision,
+    feedback
   });
-  return response.data; // Return response data
+  return response.data;
 };

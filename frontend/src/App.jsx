@@ -1,89 +1,80 @@
-import React, { useState } from 'react'; // Import React hooks
-import CommentInput from './components/CommentInput'; // Import CommentInput component
-import ModerationResult from './components/ModerationResult'; // Import ModerationResult component
-import { moderateComment, submitFeedback } from './api'; // Import moderation API
-import { Shield } from 'lucide-react'; // Import Shield icon
+import React, { useState } from 'react';
+import CommentInput from './components/CommentInput';
+import ModerationResult from './components/ModerationResult';
+import { moderateComment, submitFeedback } from './api';
+import { Shield } from 'lucide-react';
 
-function App() { // Define App component
-  const [loading, setLoading] = useState(false); // Initialize loading state
-  const [result, setResult] = useState(null); // Initialize result state
-  const [error, setError] = useState(null); // Initialize error state
-  const [lastComment, setLastComment] = useState(''); // Store last moderated comment
+function App() {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastComment, setLastComment] = useState('');
 
-  const handleModerate = async (comment) => { // Define moderation handler
-    setLoading(true); // Set loading true
-    setError(null); // Clear previous errors
-    setResult(null); // Clear previous results
-    setLastComment(comment); // Save comment for feedback
+  const handleModerate = async (comment) => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setLastComment(comment);
 
-    try { // Try API call
-      const response = await moderateComment(comment); // Call moderation API
-      setResult(response); // Store response data
-    } catch (err) { // Catch API errors
-      setError(err.response?.data?.detail || 'Failed to moderate comment. Make sure the backend is running.'); // Set error message
-      console.error('Moderation error:', err); // Log error to console
-    } finally { // Execute after try/catch
-      setLoading(false); // Set loading false
+    try {
+      const response = await moderateComment(comment);
+      setResult(response);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to moderate comment. Make sure the backend is running.');
+      console.error('Moderation error:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleFeedback = async (comment, decision, feedback) => { // Define feedback handler
-    return submitFeedback(comment, decision, feedback); // Send feedback to backend
+  const handleFeedback = async (comment, decision, feedback) => {
+    return submitFeedback(comment, decision, feedback);
   };
 
-  return ( // Return JSX
-    <div className="app"> {/* Main container */}
-      <div className="app__shell"> {/* Center content */}
-        {/* Header */}
-        <header className="hero"> {/* Header section */}
-          <div className="hero__brand"> {/* Title row */}
-            <div className="hero__icon"> {/* Icon container */}
-              <Shield className="icon icon--xl" /> {/* Render Shield icon */}
-            </div> {/* Close icon container */}
-            <div> {/* Title copy */}
-              <h1 className="hero__title"> {/* Main title */}
-                Content Moderation System {/* Title text */}
-              </h1> {/* Close title */}
-              <p className="hero__subtitle"> {/* Subtitle text */}
-                DQN policy over contextual toxicity signals {/* Subtitle content */}
-              </p> {/* Close subtitle */}
-            </div> {/* Close title copy */}
-          </div> {/* Close title row */}
-          <p className="hero__lede"> {/* Supporting line */}
-            Evaluate, explain, and refine moderation actions with realtime feedback. {/* Supporting text */}
-          </p> {/* Close supporting line */}
-        </header> {/* Close header section */}
+  return (
+    <div className="app">
+      <div className="app__shell">
+        <header className="hero">
+          <div className="hero__brand">
+            <div className="hero__icon">
+              <Shield className="icon icon--xl" />
+            </div>
+            <div>
+              <h1 className="hero__title">Content Moderation System</h1>
+              <p className="hero__subtitle">DQN policy over contextual toxicity signals</p>
+            </div>
+          </div>
+          <p className="hero__lede">
+            Evaluate, explain, and refine moderation actions with realtime feedback.
+          </p>
+        </header>
 
-        {/* Main Content */}
-        <CommentInput onSubmit={handleModerate} loading={loading} /> {/* Render input component */}
+        <CommentInput onSubmit={handleModerate} loading={loading} />
 
-        {/* Error Message */}
-        {error && ( // Conditionally render error
-          <div className="error-banner"> {/* Error container */}
-            <p className="font-semibold">Error:</p> {/* Error label */}
-            <p>{error}</p> {/* Display error message */}
-          </div> // Close error container
+        {error && (
+          <div className="error-banner">
+            <p className="font-semibold">Error:</p>
+            <p>{error}</p>
+          </div>
         )}
 
-        {/* Result */}
-        {result && ( // Conditionally render result
-          <ModerationResult // Render result component
-            result={result} // Pass result data
-            comment={lastComment} // Pass original comment
-            onFeedback={handleFeedback} // Pass feedback handler
+        {result && (
+          <ModerationResult
+            result={result}
+            comment={lastComment}
+            onFeedback={handleFeedback}
           />
         )}
 
-        {/* Footer */}
-        <footer className="footer"> {/* Footer container */}
-          <p className="footer__line">Powered by DQN + DistilBERT + Detoxify</p> {/* Technology stack */}
-          <p className="footer__line"> {/* Footer description */}
-            Demonstrating responsible AI deployment with explainable RL {/* Footer text */}
-          </p> {/* Close description */}
-        </footer> {/* Close footer */}
-      </div> {/* Close center content */}
-    </div> // Close main container
+        <footer className="footer">
+          <p className="footer__line">Powered by DQN + DistilBERT + Detoxify</p>
+          <p className="footer__line">
+            Demonstrating responsible AI deployment with explainable RL
+          </p>
+        </footer>
+      </div>
+    </div>
   );
 }
 
-export default App; // Export App component
+export default App;

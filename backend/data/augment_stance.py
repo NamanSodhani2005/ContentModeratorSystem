@@ -3,10 +3,10 @@ import random
 
 import pandas as pd
 
-# Seed for repeat
+# Deterministic sampling for reproducibility.
 random.seed(42)
 
-# Base targets
+# Base targets for stance generation.
 THING_TARGETS = [
     "spam",
     "spam calls",
@@ -96,7 +96,7 @@ THING_TARGETS = [
     "radicalization"
 ]
 
-# Extremist ideologies
+# Ideology targets.
 IDEOLOGY_TARGETS = [
     "nazism",
     "fascism",
@@ -107,7 +107,7 @@ IDEOLOGY_TARGETS = [
     "extremist groups"
 ]
 
-# Negative verbs
+# Negative verbs.
 NEG_VERBS = [
     "hate",
     "despise",
@@ -118,7 +118,7 @@ NEG_VERBS = [
     "reject"
 ]
 
-# Stance templates
+# Template phrases.
 TEMPLATES = [
     "i {verb} {target}",
     "i {intens} {verb} {target}",
@@ -137,7 +137,7 @@ TEMPLATES = [
     "we want less {target}"
 ]
 
-# Intensity words
+# Intensity modifiers.
 INTENSIFIERS = [
     "",
     "really",

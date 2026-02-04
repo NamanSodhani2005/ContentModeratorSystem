@@ -32,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global models (loaded on startup)
+# Runtime state
 agent = None
 tokenizer = None
 embedder = None
@@ -46,7 +46,8 @@ ACTION_NAMES = {0: "keep", 1: "warn", 2: "remove", 3: "temp_ban", 4: "perma_ban"
 ACTION_IDS = {v: k for k, v in ACTION_NAMES.items()}
 ACTION_COLORS = {"keep": "green", "warn": "yellow", "remove": "orange", "temp_ban": "red", "perma_ban": "darkred"}
 FEEDBACK_REWARDS = {"good": 1.0, "bad": -1.0, "too_harsh": -1.0, "too_soft": -1.0}
-# Feedback tuning knobs
+
+# Feedback tuning
 FEEDBACK_MIN_BATCH = 8
 FEEDBACK_BATCH_SIZE = 32
 FEEDBACK_TRAIN_STEPS = 10
@@ -65,9 +66,11 @@ class ModerationResponse(BaseModel):
     q_values: list
 
 class FeedbackRequest(BaseModel):
+    """Feedback payload (good | bad | too_harsh | too_soft)."""
+
     comment: str
     decision: str
-    feedback: str  # good | bad | too_harsh | too_soft
+    feedback: str
 
 @app.on_event("startup")
 async def load_models():
@@ -120,13 +123,13 @@ async def load_models():
         print(f"  [OK] Loaded trained model from {model_path}")
     else:
         print("  [WARN] No trained model found. Using untrained agent.")
-        print(f"    Train model first: python backend/rl_training/train.py")
+        print("    Train model first: python backend/rl_training/train.py")
 
-    # Set eval mode
     agent.policy_network.eval()
     agent.target_network.eval()
 
     print("[OK] All models loaded successfully!")
+
 
 def embed_comment(comment_text):
     """Generate 768-dim embedding for comment using DistilBERT."""
@@ -140,9 +143,10 @@ def embed_comment(comment_text):
 
     with torch.no_grad():
         outputs = embedder(**inputs)
-        embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()  # CLS token
+        embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
 
     return embedding
+
 
 def compute_target_features(comment_text):
     """
@@ -166,11 +170,11 @@ def compute_target_features(comment_text):
             attention_mask=inputs['attention_mask']
         )
 
-        token_probs = torch.softmax(outputs['token_logits'], dim=-1)[..., 1]  # P(target)
-        token_probs = token_probs * inputs['attention_mask']  # mask padding
+        token_probs = torch.softmax(outputs['token_logits'], dim=-1)[..., 1]
+        token_probs = token_probs * inputs['attention_mask']
         tox_probs = torch.softmax(outputs['toxicity_logits'], dim=-1)[0]
 
-        target_presence = token_probs.max().item()  # max target prob
+        target_presence = token_probs.max().item()
         if tox_probs.numel() == 3:
             hate_prob = tox_probs[0].item()
             offensive_prob = tox_probs[1].item()
@@ -189,30 +193,30 @@ def construct_state(comment_embedding, comment_text):
     Construct state vector from comment embedding and text.
     [comment_embedding(768), hate_scores(3), target_features(4), user_history(10), platform_metrics(5)]
     """
-    # Mock user history (in production, fetch from database)
+    # user_history order: avg_toxicity, warnings_received, removals, temp_bans, perma_bans,
+    # activity_level, engagement_score, appeal_count, days_active, posts_count
     user_history = np.array([
-        0.2,   # avg_toxicity
-        0.0,   # warnings_received
-        0.0,   # removals
-        0.0,   # temp_bans
-        0.0,   # perma_bans
-        1.0,   # activity_level
-        0.8,   # engagement_score
-        0.0,   # appeal_count
-        10.0,  # days_active
-        5.0    # posts_count
+        0.2,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.8,
+        0.0,
+        10.0,
+        5.0
     ])
 
-    # Mock platform metrics
+    # platform_metrics order: platform_health, user_satisfaction, false_positive_rate, moderation_rate, time_step_norm
     platform_metrics = np.array([
-        0.85,  # platform_health
-        0.80,  # user_satisfaction
-        0.05,  # false_positive_rate
-        0.15,  # moderation_rate
-        0.5    # time_step_norm
+        0.85,
+        0.80,
+        0.05,
+        0.15,
+        0.5
     ])
 
-    # Compute hate scores
     hate_scores = np.zeros(3, dtype=np.float32)
     if hate_speech_head is not None:
         with torch.no_grad():
@@ -224,14 +228,15 @@ def construct_state(comment_embedding, comment_text):
     target_features = compute_target_features(comment_text)
 
     state = np.concatenate([
-        comment_embedding,  # 768
-        hate_scores,        # 3
-        target_features,    # 4
-        user_history,       # 10
-        platform_metrics    # 5
-    ]).astype(np.float32)   # Total: 790
+        comment_embedding,
+        hate_scores,
+        target_features,
+        user_history,
+        platform_metrics
+    ]).astype(np.float32)
 
     return state
+
 
 def generate_explanation(comment, action, q_values, toxicity_scores, override_reason=None):
     """Generate natural language explanation for moderation decision."""
@@ -267,7 +272,7 @@ def generate_explanation(comment, action, q_values, toxicity_scores, override_re
         reasoning_parts.append(override_reason)
 
     if not override_reason:
-        q_diff = q_values[action] - np.sort(q_values)[-2]  # Q-value margin
+        q_diff = q_values[action] - np.sort(q_values)[-2]
         if q_diff > 1.0:
             reasoning_parts.append("High confidence decision")
         elif q_diff > 0.5:
@@ -277,6 +282,7 @@ def generate_explanation(comment, action, q_values, toxicity_scores, override_re
 
     return ". ".join(reasoning_parts) + "."
 
+
 def log_feedback_entry(entry):
     """Append feedback entry to JSONL log."""
     log_path = Path('backend/data/feedback.jsonl')
@@ -284,10 +290,12 @@ def log_feedback_entry(entry):
     with open(log_path, 'a', encoding='utf-8') as handle:
         handle.write(json.dumps(entry) + "\n")
 
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
     return {"status": "online", "message": "Content Moderation API", "version": "1.0.0"}
+
 
 @app.post("/api/moderate", response_model=ModerationResponse)
 async def moderate_comment(request: ModerationRequest):
@@ -330,6 +338,7 @@ async def moderate_comment(request: ModerationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Moderation failed: {str(e)}")
 
+
 @app.post("/api/feedback")
 async def submit_feedback(request: FeedbackRequest):
     """Accept user feedback and update the DQN agent online."""
@@ -355,11 +364,11 @@ async def submit_feedback(request: FeedbackRequest):
 
         action = ACTION_IDS[decision]
         primary_reward = FEEDBACK_REWARDS[feedback]
-        next_state = state  # terminal
+        next_state = state
         done = True
 
-        # Build feedback transitions
         transitions = []
+        # Translate feedback into training transitions.
         if feedback == "good":
             transitions.append((action, 1.0))
         elif feedback == "bad":
@@ -375,25 +384,20 @@ async def submit_feedback(request: FeedbackRequest):
             if suggested_action != action:
                 transitions.append((suggested_action, 1.0))
 
-        # Push transitions
         for action_id, reward in transitions:
             agent.replay_buffer.push(state, action_id, reward, next_state, done)
 
-        # Train batch update
         buffer_size = len(agent.replay_buffer)
         batch_size = min(FEEDBACK_BATCH_SIZE, buffer_size)
         losses = []
         updated = False
         if buffer_size >= FEEDBACK_MIN_BATCH:
-            # Enable training mode
             agent.policy_network.train()
             for _ in range(FEEDBACK_TRAIN_STEPS):
                 loss = agent.train_step(batch_size=batch_size)
                 if loss is not None:
                     losses.append(loss)
-            # Update target net
             agent.update_target_network(tau=FEEDBACK_TARGET_TAU)
-            # Restore eval mode
             agent.policy_network.eval()
             updated = len(losses) > 0
 
@@ -401,13 +405,11 @@ async def submit_feedback(request: FeedbackRequest):
 
         saved = False
         if feedback_count % FEEDBACK_SAVE_EVERY == 0:
-            # Save periodically
             save_path = Path('backend/saved_models/dqn_final.pt')
             save_path.parent.mkdir(exist_ok=True)
             agent.save(save_path)
             saved = True
 
-        # Log feedback
         log_feedback_entry({
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "comment": comment,
@@ -417,7 +419,6 @@ async def submit_feedback(request: FeedbackRequest):
         })
 
         loss_value = float(np.mean(losses)) if losses else None
-        # Return update stats
         return {
             "status": "ok",
             "loss": loss_value,
@@ -432,6 +433,7 @@ async def submit_feedback(request: FeedbackRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Feedback failed: {str(e)}")
+
 
 @app.get("/api/metrics")
 async def get_metrics():
@@ -451,6 +453,7 @@ async def get_metrics():
         "final_false_positive_rate": float(stats['false_positive_rates'][-1])
     }
 
+
 @app.get("/api/examples")
 async def get_examples():
     """Return sample moderation examples."""
@@ -462,6 +465,8 @@ async def get_examples():
         {"comment": "Threatening violence against [group]", "expected": "perma_ban"}
     ]
 
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

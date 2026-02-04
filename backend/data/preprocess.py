@@ -67,7 +67,7 @@ def main(num_samples: int = None):
             ).to(device)
 
             outputs = model(**inputs)
-            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS token
+            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
             embeddings.append(batch_embeddings)
 
     embeddings = np.vstack(embeddings)
@@ -137,11 +137,11 @@ def main(num_samples: int = None):
                     attention_mask=inputs['attention_mask']
                 )
 
-                token_probs = torch.softmax(outputs['token_logits'], dim=-1)[..., 1]  # P(target)
-                tox_probs = torch.softmax(outputs['toxicity_logits'], dim=-1)  # 3-class probs
-                token_probs = token_probs * inputs['attention_mask']  # mask padding
+                token_probs = torch.softmax(outputs['token_logits'], dim=-1)[..., 1]
+                tox_probs = torch.softmax(outputs['toxicity_logits'], dim=-1)
+                token_probs = token_probs * inputs['attention_mask']
 
-                target_presence = token_probs.max(dim=1).values.cpu().numpy()  # max target prob
+                target_presence = token_probs.max(dim=1).values.cpu().numpy()
                 hate_prob = tox_probs[:, 0].cpu().numpy()
                 offensive_prob = tox_probs[:, 1].cpu().numpy()
                 normal_prob = tox_probs[:, 2].cpu().numpy()

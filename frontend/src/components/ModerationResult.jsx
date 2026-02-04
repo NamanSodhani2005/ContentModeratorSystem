@@ -1,52 +1,52 @@
-import React, { useEffect, useState } from 'react'; // Import React hooks
-import { Shield, AlertTriangle, X, Ban, XCircle, CheckCircle } from 'lucide-react'; // Import all icons
+import React, { useEffect, useState } from 'react';
+import { Shield, AlertTriangle, X, Ban, XCircle, CheckCircle } from 'lucide-react';
 
-const ModerationResult = ({ result, comment, onFeedback }) => { // Define ModerationResult component
-  if (!result) return null; // Return null if no result
+const ModerationResult = ({ result, comment, onFeedback }) => {
+  if (!result) return null;
 
-  const [feedbackState, setFeedbackState] = useState({ // Track feedback state
+  const [feedbackState, setFeedbackState] = useState({
     status: 'idle',
     choice: null,
     error: null,
     message: null,
-    updated: false // Update flag
+    updated: false
   });
 
-  useEffect(() => { // Reset feedback on change
+  useEffect(() => {
     setFeedbackState({ status: 'idle', choice: null, error: null, message: null, updated: false });
   }, [result?.decision, comment]);
 
-  const getActionIcon = (decision) => { // Define icon getter function
-    const icons = { // Define icon map
-      keep: <CheckCircle className="icon icon--lg" />, // Keep action icon
-      warn: <AlertTriangle className="icon icon--lg" />, // Warn action icon
-      remove: <X className="icon icon--lg" />, // Remove action icon
-      temp_ban: <Ban className="icon icon--lg" />, // Temp ban icon
-      perma_ban: <XCircle className="icon icon--lg" /> // Perma ban icon
+  const getActionIcon = (decision) => {
+    const icons = {
+      keep: <CheckCircle className="icon icon--lg" />,
+      warn: <AlertTriangle className="icon icon--lg" />,
+      remove: <X className="icon icon--lg" />,
+      temp_ban: <Ban className="icon icon--lg" />,
+      perma_ban: <XCircle className="icon icon--lg" />
     };
-    return icons[decision] || <Shield className="icon icon--lg" />; // Return icon or default
+    return icons[decision] || <Shield className="icon icon--lg" />;
   };
 
-  const toxicityCategories = [ // Define categories array
-    { key: 'toxicity', label: 'Toxicity' }, // Toxicity category
-    { key: 'severe_toxicity', label: 'Severe Toxicity' }, // Severe toxicity category
-    { key: 'obscene', label: 'Obscene' }, // Obscene category
-    { key: 'threat', label: 'Threat' }, // Threat category
-    { key: 'insult', label: 'Insult' }, // Insult category
-    { key: 'identity_attack', label: 'Identity Attack' } // Identity attack category
+  const toxicityCategories = [
+    { key: 'toxicity', label: 'Toxicity' },
+    { key: 'severe_toxicity', label: 'Severe Toxicity' },
+    { key: 'obscene', label: 'Obscene' },
+    { key: 'threat', label: 'Threat' },
+    { key: 'insult', label: 'Insult' },
+    { key: 'identity_attack', label: 'Identity Attack' }
   ];
 
-  const feedbackOptions = [ // Feedback options
+  const feedbackOptions = [
     { key: 'too_soft', label: 'Too lenient' },
     { key: 'good', label: 'Just right' },
     { key: 'too_harsh', label: 'Too harsh' }
   ];
 
-  const canSendFeedback = Boolean(onFeedback && comment && result?.decision); // Validate feedback inputs
-  const isSubmitting = feedbackState.status === 'submitting'; // Submission state
+  const canSendFeedback = Boolean(onFeedback && comment && result?.decision);
+  const isSubmitting = feedbackState.status === 'submitting';
 
-  const handleFeedback = async (feedbackKey) => { // Handle feedback submit
-    if (!canSendFeedback || isSubmitting) { // Guard invalid state
+  const handleFeedback = async (feedbackKey) => {
+    if (!canSendFeedback || isSubmitting) {
       return;
     }
 
@@ -54,7 +54,6 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
     try {
       const response = await onFeedback(comment, result.decision, feedbackKey);
       const updated = Boolean(response?.updated);
-      // Build feedback message
       const message = updated
         ? `Model updated (${response.update_steps || 0} steps).`
         : 'Feedback saved. Model will update after more feedback.';
@@ -65,66 +64,60 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
     }
   };
 
-  return ( // Return JSX
-    <div className="card result-card fade-in"> {/* Main result container */}
-      {/* Decision Header */}
-      <div className="result__header"> {/* Header row */}
-        <div className="decision-badge" data-action={result.decision}> {/* Icon container */}
-          {getActionIcon(result.decision)} {/* Render decision icon */}
-        </div> {/* Close icon container */}
-        <div className="result__meta"> {/* Text container */}
-          <h3 className="result__title"> {/* Decision title */}
-            {result.decision.replace('_', ' ')} {/* Display decision text */}
-          </h3> {/* Close title */}
-          <p className="result__confidence"> {/* Confidence text */}
-            Confidence: {(result.confidence * 100).toFixed(1)}% {/* Display confidence percentage */}
-          </p> {/* Close confidence */}
-        </div> {/* Close text container */}
-      </div> {/* Close header row */}
+  return (
+    <div className="card result-card fade-in">
+      <div className="result__header">
+        <div className="decision-badge" data-action={result.decision}>
+          {getActionIcon(result.decision)}
+        </div>
+        <div className="result__meta">
+          <h3 className="result__title">{result.decision.replace('_', ' ')}</h3>
+          <p className="result__confidence">
+            Confidence: {(result.confidence * 100).toFixed(1)}%
+          </p>
+        </div>
+      </div>
 
-      {/* Reasoning */}
-      <div className="panel"> {/* Reasoning container */}
-        <h4 className="panel__title">Reasoning</h4> {/* Reasoning title */}
-        <p className="text-muted">{result.reasoning}</p> {/* Display reasoning text */}
-      </div> {/* Close reasoning container */}
+      <div className="panel">
+        <h4 className="panel__title">Reasoning</h4>
+        <p className="text-muted">{result.reasoning}</p>
+      </div>
 
-      {/* Toxicity Breakdown */}
-      <div> {/* Toxicity section */}
-        <h4 className="panel__title">Toxicity Analysis</h4> {/* Section title */}
-        <div className="toxicity"> {/* Categories container */}
-          {toxicityCategories.map(({ key, label }) => { // Map through categories
-            const score = result.toxicity_breakdown[key] || 0; // Get score or zero
-            const percentage = (score * 100).toFixed(1); // Calculate percentage
+      <div>
+        <h4 className="panel__title">Toxicity Analysis</h4>
+        <div className="toxicity">
+          {toxicityCategories.map(({ key, label }) => {
+            const score = result.toxicity_breakdown[key] || 0;
+            const percentage = (score * 100).toFixed(1);
             const barColor = score > 0.7
               ? '#111111'
               : score > 0.5
                 ? '#6b7280'
                 : '#cbd5e1';
 
-            return ( // Return category element
-              <div key={key} className="toxicity__row"> {/* Category container */}
-                <div className="toxicity__label"> {/* Label row */}
-                  <span>{label}</span> {/* Category label */}
-                  <span>{percentage}%</span> {/* Score percentage */}
-                </div> {/* Close label row */}
-                <div className="progress"> {/* Progress bar background */}
-                  <div // Progress bar fill
-                    className="progress__fill" // Bar fill styles
-                    style={{ width: `${percentage}%`, backgroundColor: barColor }} // Set bar width
+            return (
+              <div key={key} className="toxicity__row">
+                <div className="toxicity__label">
+                  <span>{label}</span>
+                  <span>{percentage}%</span>
+                </div>
+                <div className="progress">
+                  <div
+                    className="progress__fill"
+                    style={{ width: `${percentage}%`, backgroundColor: barColor }}
                   />
-                </div> {/* Close progress background */}
-              </div> // Close category container
+                </div>
+              </div>
             );
           })}
-        </div> {/* Close categories container */}
-      </div> {/* Close toxicity section */}
+        </div>
+      </div>
 
-      {/* Feedback */}
-      <div> {/* Feedback section */}
-        <h4 className="panel__title">Was this decision fair?</h4> {/* Section title */}
-        <div className="feedback__buttons"> {/* Button row */}
-          {feedbackOptions.map((option) => { // Map feedback options
-            const isSelected = feedbackState.choice === option.key; // Selected state
+      <div>
+        <h4 className="panel__title">Was this decision fair?</h4>
+        <div className="feedback__buttons">
+          {feedbackOptions.map((option) => {
+            const isSelected = feedbackState.choice === option.key;
             const isDisabled = !canSendFeedback || isSubmitting;
             const buttonClass = [
               'feedback__button',
@@ -132,7 +125,7 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
               isDisabled ? 'is-disabled' : ''
             ].filter(Boolean).join(' ');
 
-            return ( // Return feedback button
+            return (
               <button
                 key={option.key}
                 type="button"
@@ -144,50 +137,43 @@ const ModerationResult = ({ result, comment, onFeedback }) => { // Define Modera
               </button>
             );
           })}
-        </div> {/* Close button row */}
-        <p className="feedback__note">Your feedback updates the model online.</p> {/* Helper text */}
-        {feedbackState.status === 'success' && feedbackState.message && ( // Success message
+        </div>
+        <p className="feedback__note">Your feedback updates the model online.</p>
+        {feedbackState.status === 'success' && feedbackState.message && (
           <p className={`feedback__message ${feedbackState.updated ? 'feedback__message--ok' : 'feedback__message--info'}`}>
             {feedbackState.message}
           </p>
         )}
-        {feedbackState.status === 'error' && ( // Error message
+        {feedbackState.status === 'error' && (
           <p className="feedback__message feedback__message--error">{feedbackState.error}</p>
         )}
-      </div> {/* Close feedback section */}
+      </div>
 
-      {/* Alternative Actions */}
-      <div> {/* Alternatives section */}
-        <h4 className="panel__title">Alternative Actions (by Q-value)</h4> {/* Section title */}
-        <div className="alt-actions"> {/* Actions container */}
-          {result.alternative_actions.slice(0, 3).map((alt) => { // Map top 3 alternatives
-            const isChosen = alt.action === result.decision; // Check chosen action
-            return ( // Return action row
-              <div // Action row
-                key={alt.action} // Unique key
-                className={`alt-action ${isChosen ? 'is-selected' : ''}`} // Row base styles
+      <div>
+        <h4 className="panel__title">Alternative Actions (by Q-value)</h4>
+        <div className="alt-actions">
+          {result.alternative_actions.slice(0, 3).map((alt) => {
+            const isChosen = alt.action === result.decision;
+            return (
+              <div
+                key={alt.action}
+                className={`alt-action ${isChosen ? 'is-selected' : ''}`}
               >
-                <div className="alt-action__left"> {/* Left side */}
-                  {isChosen && <span className="badge">CHOSEN</span>} {/* Show chosen badge */}
-                  <span> {/* Action name */}
-                    {alt.action.replace('_', ' ')} {/* Display action text */}
-                  </span> {/* Close action name */}
-                </div> {/* Close left side */}
-                <div className="alt-action__meta"> {/* Right side */}
-                  <span> {/* Q-value label */}
-                    Q: {alt.q_value.toFixed(3)} {/* Display Q-value */}
-                  </span> {/* Close Q-value */}
-                  <span> {/* Probability label */}
-                    P: {(alt.probability * 100).toFixed(1)}% {/* Display probability */}
-                  </span> {/* Close probability */}
-                </div> {/* Close right side */}
-              </div> // Close action row
+                <div className="alt-action__left">
+                  {isChosen && <span className="badge">CHOSEN</span>}
+                  <span>{alt.action.replace('_', ' ')}</span>
+                </div>
+                <div className="alt-action__meta">
+                  <span>Q: {alt.q_value.toFixed(3)}</span>
+                  <span>P: {(alt.probability * 100).toFixed(1)}%</span>
+                </div>
+              </div>
             );
           })}
-        </div> {/* Close actions container */}
-      </div> {/* Close alternatives section */}
-    </div> // Close main container
+        </div>
+      </div>
+    </div>
   );
 };
 
-export default ModerationResult; // Export ModerationResult component
+export default ModerationResult;
