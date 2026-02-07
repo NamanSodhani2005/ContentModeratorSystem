@@ -84,3 +84,6 @@ Thumbs.db
 *.md
 !/README.md
 !/QUICKSTART.md
+
+# Local AI tool configs
+.claude/

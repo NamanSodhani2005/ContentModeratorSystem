@@ -12,7 +12,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from transformers import DistilBertTokenizer, DistilBertModel
+from transformers import DistilBertTokenizerFast, DistilBertModel, DistilBertForSequenceClassification
 from detoxify import Detoxify
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -37,8 +37,10 @@ tokenizer = None
 embedder = None
 detoxify_model = None
 target_span_model = None
+toxicity_classifier = None
 embedding_device = None
 feedback_count = 0
+TOXICITY_ENCODER_DIR = Path('backend/saved_models/toxicity_encoder')
 
 ACTION_NAMES = {0: "keep", 1: "warn", 2: "remove", 3: "temp_ban", 4: "perma_ban"}
 ACTION_IDS = {v: k for k, v in ACTION_NAMES.items()}
@@ -72,16 +74,24 @@ class FeedbackRequest(BaseModel):
 @app.on_event("startup")
 async def load_models():
     """Load all models on startup."""
-    global agent, tokenizer, embedder, detoxify_model, embedding_device, target_span_model
+    global agent, tokenizer, embedder, detoxify_model, embedding_device, target_span_model, toxicity_classifier
 
     print("Loading models...")
 
     print("  Loading DistilBERT...")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     embedding_device = device
-    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-    embedder = DistilBertModel.from_pretrained('distilbert-base-uncased')
-    embedder.to(device)
+    if (TOXICITY_ENCODER_DIR / "config.json").exists():
+        tokenizer = DistilBertTokenizerFast.from_pretrained(TOXICITY_ENCODER_DIR)
+        toxicity_classifier = DistilBertForSequenceClassification.from_pretrained(TOXICITY_ENCODER_DIR)
+        toxicity_classifier.to(device)
+        toxicity_classifier.eval()
+        embedder = toxicity_classifier.distilbert
+        print(f"  [OK] Loaded supervised toxicity encoder from {TOXICITY_ENCODER_DIR}")
+    else:
+        tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
+        embedder = DistilBertModel.from_pretrained('distilbert-base-uncased')
+        embedder.to(device)
     embedder.eval()
 
     target_span_path = Path('backend/saved_models/target_span_model.pt')
@@ -92,8 +102,11 @@ async def load_models():
         target_span_model.eval()
         print("  [OK] Loaded target span model")
 
-    print("  Loading Detoxify...")
-    detoxify_model = Detoxify('original')
+    if toxicity_classifier is None:
+        print("  Loading Detoxify...")
+        detoxify_model = Detoxify('original')
+    else:
+        detoxify_model = None
 
     print("  Loading DQN agent...")
     agent_device = device.type
@@ -131,10 +144,40 @@ def embed_comment(comment_text):
     ).to(embedding_device)
 
     with torch.no_grad():
-        outputs = embedder(**inputs)
-        embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
+        if toxicity_classifier is not None:
+            outputs = toxicity_classifier(
+                input_ids=inputs['input_ids'],
+                attention_mask=inputs['attention_mask'],
+                output_hidden_states=True,
+                return_dict=True
+            )
+            embedding = outputs.hidden_states[-1][:, 0, :].squeeze().cpu().numpy()
+            toxicity_logits = outputs.logits.squeeze(0).cpu().numpy()
+        else:
+            outputs = embedder(**inputs)
+            embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
+            toxicity_logits = None
 
-    return embedding, inputs
+    return embedding, inputs, toxicity_logits
+
+
+def compute_toxicity_breakdown(comment_text, toxicity_logits=None):
+    """
+    Prefer supervised toxicity head scores when available; fallback to Detoxify.
+    """
+    if toxicity_logits is not None:
+        probs = torch.sigmoid(torch.tensor(toxicity_logits)).cpu().numpy()
+        return {
+            "toxicity": float(probs[0]),
+            "severe_toxicity": float(probs[1]),
+            "obscene": float(probs[2]),
+            "threat": float(probs[3]),
+            "insult": float(probs[4]),
+            "identity_attack": float(probs[5]),
+        }
+    if detoxify_model is not None:
+        return {k: float(v) for k, v in detoxify_model.predict(comment_text).items()}
+    return {}
 
 
 def compute_target_features(inputs):
@@ -174,7 +217,7 @@ def construct_state(comment_text):
     Construct state vector from comment text.
     [comment_embedding(768), target_features(4)]
     """
-    embedding, inputs = embed_comment(comment_text)
+    embedding, inputs, toxicity_logits = embed_comment(comment_text)
     target_features = compute_target_features(inputs)
 
     state = np.concatenate([
@@ -182,7 +225,7 @@ def construct_state(comment_text):
         target_features,
     ]).astype(np.float32)
 
-    return state
+    return state, inputs, toxicity_logits
 
 
 def generate_explanation(comment, action, q_values, toxicity_scores):
@@ -249,9 +292,9 @@ async def moderate_comment(request: ModerationRequest):
         if not comment:
             raise HTTPException(status_code=400, detail="Comment cannot be empty")
 
-        state = construct_state(comment)
+        state, _, toxicity_logits = construct_state(comment)
         action, q_values = agent.select_action(state, eval_mode=True)
-        toxicity_scores = detoxify_model.predict(comment) if detoxify_model else {}
+        toxicity_scores = compute_toxicity_breakdown(comment, toxicity_logits=toxicity_logits)
         reasoning = generate_explanation(comment, action, q_values, toxicity_scores)
 
         q_exp = np.exp(q_values - np.max(q_values))
@@ -301,7 +344,7 @@ async def submit_feedback(request: FeedbackRequest):
         if feedback not in FEEDBACK_REWARDS:
             raise HTTPException(status_code=400, detail="Invalid feedback")
 
-        state = construct_state(comment)
+        state, _, _ = construct_state(comment)
 
         action = ACTION_IDS[decision]
         primary_reward = FEEDBACK_REWARDS[feedback]

@@ -3,6 +3,7 @@ Train target span model.
 """
 
 import argparse
+import os
 import sys
 import json
 import re
@@ -964,8 +965,13 @@ def train(args):
     train_dataset = TargetSpanDataset(train_texts, train_token_labels, train_toxicity, tokenizer, args.max_length)
     val_dataset = TargetSpanDataset(val_texts, val_token_labels, val_toxicity, tokenizer, args.max_length)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    # pin_memory speeds up host-to-device transfers on CUDA
+    # num_workers>0 lets CPU prepare next batch while GPU trains on current one
+    pin = device.type == "cuda"
+    num_workers = min(4, os.cpu_count() or 1) if pin else 0
+    loader_kwargs = dict(pin_memory=pin, num_workers=num_workers, persistent_workers=num_workers > 0)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
 
     print(f"Initializing TargetSpanToxicityModel (num_tox_classes={num_tox_classes})...")
     model = TargetSpanToxicityModel(num_tox_classes=num_tox_classes)
@@ -973,6 +979,7 @@ def train(args):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    # Learning rate schedule: linear warmup for 1 epoch, then cosine decay
     total_steps = len(train_loader) * args.epochs
     warmup_steps = len(train_loader)
 
@@ -984,6 +991,11 @@ def train(args):
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    # Mixed precision: autocast computes forward pass in float16 on GPU,
+    # GradScaler handles loss scaling to prevent underflow in float16 gradients.
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler(enabled=use_amp)
+
     patience = getattr(args, "patience", 3)
     best_val_loss = float("inf")
     epochs_no_improve = 0
@@ -991,33 +1003,51 @@ def train(args):
     interrupted = False
 
     print(f"\nTraining for up to {args.epochs} epochs (early stopping patience={patience})...")
+    if use_amp:
+        print("  Mixed precision (float16) enabled")
     try:
         for epoch in range(args.epochs):
             model.train()
             train_losses = []
 
+            # --- Training loop ---
             for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}"):
                 input_ids = batch["input_ids"].to(device)
                 attention_mask = batch["attention_mask"].to(device)
                 token_labels = batch["token_labels"].to(device)
                 toxicity_labels = batch["toxicity_labels"].to(device)
 
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    token_labels=token_labels,
-                    toxicity_labels=toxicity_labels
-                )
+                # Forward pass under autocast (float16 on GPU, no-op on CPU)
+                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_labels=token_labels,
+                        toxicity_labels=toxicity_labels
+                    )
+                    loss = outputs["loss"]
 
-                loss = outputs["loss"]
+                # Backward pass with gradient scaling for mixed precision
                 optimizer.zero_grad()
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
+
+                if use_amp:
+                    # GradScaler can skip optimizer.step() on overflow.
+                    # Only advance LR schedule when a real optimizer step occurred.
+                    scale_before = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    if scaler.get_scale() >= scale_before:
+                        scheduler.step()
+                else:
+                    optimizer.step()
+                    scheduler.step()
 
                 train_losses.append(loss.item())
 
+            # --- Validation loop ---
             model.eval()
             val_correct = 0
             val_total = 0
@@ -1030,12 +1060,13 @@ def train(args):
                     token_labels = batch["token_labels"].to(device)
                     toxicity_labels = batch["toxicity_labels"].to(device)
 
-                    outputs = model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        token_labels=token_labels,
-                        toxicity_labels=toxicity_labels
-                    )
+                    with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                        outputs = model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            token_labels=token_labels,
+                            toxicity_labels=toxicity_labels
+                        )
 
                     val_losses.append(outputs["loss"].item())
                     preds = torch.argmax(outputs["toxicity_logits"], dim=-1)
@@ -1048,6 +1079,7 @@ def train(args):
 
             print(f"Epoch {epoch + 1}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f}")
 
+            # Early stopping: save best model, stop if no improvement for `patience` epochs
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 epochs_no_improve = 0
@@ -1134,7 +1166,7 @@ def train(args):
 def parse_args():
     parser = argparse.ArgumentParser(description="Train TargetSpanToxicityModel")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-length", type=int, default=128)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--seed", type=int, default=42)

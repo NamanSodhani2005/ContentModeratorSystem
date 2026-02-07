@@ -24,12 +24,14 @@ HATE_DATA_PATH = ARCHIVE_DIR / "labeled_data.csv"
 TRAIN_DATA_PATH = DATA_DIR / "train.csv"
 TARGET_SPAN_PATH = SAVED_MODELS_DIR / "target_span_model.pt"
 DQN_PATH = SAVED_MODELS_DIR / "dqn_final.pt"
+TOXICITY_ENCODER_DIR = SAVED_MODELS_DIR / "toxicity_encoder"
 CONAN_STANCE_PATH = DATA_DIR / "Multitarget-CONAN.csv"
 
 EMBEDDINGS_PATH = DATA_DIR / "embeddings.npy"
 LABELS_PATH = DATA_DIR / "labels.npy"
 TARGET_FEATURES_PATH = DATA_DIR / "target_features.npy"
 TARGET_TOXICITY_PATH = DATA_DIR / "target_toxicity.npy"
+TOXICITY_PROBS_PATH = DATA_DIR / "toxicity_probs.npy"
 
 def _ensure_backend_path():
     backend_str = str(BACKEND_DIR)
@@ -46,7 +48,7 @@ def evaluate_policy_stance_pairs(min_action_gap=1):
 
     import numpy as np
     import torch
-    from transformers import DistilBertTokenizer, DistilBertModel
+    from transformers import DistilBertTokenizerFast, DistilBertModel, DistilBertForSequenceClassification
 
     from rl_training.models.policy_network import PolicyNetwork
     from rl_training.agents.dqn_agent import DQNAgent
@@ -57,8 +59,16 @@ def evaluate_policy_stance_pairs(min_action_gap=1):
         raise FileNotFoundError(f"Missing trained DQN model at {DQN_PATH}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
-    embedder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
+    toxicity_encoder_exists = (TOXICITY_ENCODER_DIR / "config.json").exists()
+    if toxicity_encoder_exists:
+        tokenizer = DistilBertTokenizerFast.from_pretrained(TOXICITY_ENCODER_DIR)
+        toxicity_encoder = DistilBertForSequenceClassification.from_pretrained(TOXICITY_ENCODER_DIR).to(device)
+        toxicity_encoder.eval()
+        embedder = toxicity_encoder.distilbert
+        print(f"Step 4: Using fine-tuned toxicity encoder from {TOXICITY_ENCODER_DIR}")
+    else:
+        tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
+        embedder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
     embedder.eval()
 
     target_span_model = None
@@ -142,7 +152,13 @@ def evaluate_policy_stance_pairs(min_action_gap=1):
 def train_pipeline(
     force_preprocess=False,
     skip_existing=False,
+    skip_dqn_pretrain=False,
     force_target_span=False,
+    force_toxicity_encoder=False,
+    skip_toxicity_encoder=False,
+    toxicity_epochs=2,
+    toxicity_batch_size=16,
+    toxicity_lr=2e-5,
     allow_stance_fail=False,
     stance_min_margin=0.05,
     policy_stance_gap=1,
@@ -189,11 +205,40 @@ def train_pipeline(
     else:
         print("Step 1: Skipping target span model (dataset not found).")
 
+    # Step 1b: Supervised toxicity encoder
+    toxicity_encoder_ready = (TOXICITY_ENCODER_DIR / "config.json").exists()
+    if skip_toxicity_encoder:
+        print("Step 1b: Skipping supervised toxicity encoder by flag.")
+    elif toxicity_encoder_ready and not force_toxicity_encoder:
+        print("Step 1b: Supervised toxicity encoder already exists. Skipping.")
+    else:
+        print("Step 1b: Training supervised toxicity encoder...")
+        from rl_training.train_toxicity_encoder import train as train_toxicity_encoder
+        tox_args = SimpleNamespace(
+            train_path=str(TRAIN_DATA_PATH),
+            out_dir=str(TOXICITY_ENCODER_DIR),
+            model_name="distilbert-base-uncased",
+            epochs=toxicity_epochs,
+            batch_size=toxicity_batch_size,
+            max_length=128,
+            lr=toxicity_lr,
+            weight_decay=0.01,
+            warmup_ratio=0.1,
+            val_ratio=0.1,
+            patience=2,
+            seed=42,
+            num_samples=None,
+        )
+        train_toxicity_encoder(tox_args)
+        toxicity_encoder_ready = (TOXICITY_ENCODER_DIR / "config.json").exists()
+
     # Step 2: Preprocess embeddings + features
     required = [EMBEDDINGS_PATH, LABELS_PATH]
     if TARGET_SPAN_PATH.exists():
         required.append(TARGET_FEATURES_PATH)
         required.append(TARGET_TOXICITY_PATH)
+    if toxicity_encoder_ready:
+        required.append(TOXICITY_PROBS_PATH)
 
     needs_preprocess = force_preprocess or not all(
         path.exists() for path in required
@@ -211,7 +256,11 @@ def train_pipeline(
         return False
 
     # Step 3: Train DQN agent
-    if DQN_PATH.exists() and skip_existing:
+    if skip_dqn_pretrain:
+        print("Step 3: Skipping offline DQN pretraining by flag.")
+        if not DQN_PATH.exists():
+            print("  [WARN] No existing DQN checkpoint found. API will start with an untrained policy.")
+    elif DQN_PATH.exists() and skip_existing:
         print("Step 3: DQN model already exists. Skipping.")
     else:
         print("Step 3: Training DQN agent...")
@@ -306,9 +355,42 @@ def main():
         help="Retrain the target span model even if it exists"
     )
     train_parser.add_argument(
+        "--force-toxicity-encoder",
+        action="store_true",
+        help="Retrain the supervised toxicity encoder even if it exists"
+    )
+    train_parser.add_argument(
+        "--skip-toxicity-encoder",
+        action="store_true",
+        help="Skip supervised toxicity encoder training step"
+    )
+    train_parser.add_argument(
+        "--toxicity-epochs",
+        type=int,
+        default=2,
+        help="Epochs for supervised toxicity encoder fine-tuning"
+    )
+    train_parser.add_argument(
+        "--toxicity-batch-size",
+        type=int,
+        default=16,
+        help="Batch size for supervised toxicity encoder fine-tuning"
+    )
+    train_parser.add_argument(
+        "--toxicity-lr",
+        type=float,
+        default=2e-5,
+        help="Learning rate for supervised toxicity encoder fine-tuning"
+    )
+    train_parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip DQN training if dqn_final.pt already exists"
+    )
+    train_parser.add_argument(
+        "--skip-dqn-pretrain",
+        action="store_true",
+        help="Skip offline synthetic-reward DQN training (feedback-driven RL only)"
     )
     train_parser.add_argument(
         "--allow-stance-fail",
@@ -351,7 +433,13 @@ def main():
         ok = train_pipeline(
             force_preprocess=args.force_preprocess,
             skip_existing=args.skip_existing,
+            skip_dqn_pretrain=args.skip_dqn_pretrain,
             force_target_span=args.force_target_span,
+            force_toxicity_encoder=args.force_toxicity_encoder,
+            skip_toxicity_encoder=args.skip_toxicity_encoder,
+            toxicity_epochs=args.toxicity_epochs,
+            toxicity_batch_size=args.toxicity_batch_size,
+            toxicity_lr=args.toxicity_lr,
             allow_stance_fail=args.allow_stance_fail,
             stance_min_margin=args.stance_min_margin,
             policy_stance_gap=args.policy_stance_gap,
