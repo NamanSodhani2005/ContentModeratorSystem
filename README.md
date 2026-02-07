@@ -1,18 +1,18 @@
 # Content Moderation RL System
 
-An end-to-end content moderation stack that applies a DQN policy over DistilBERT embeddings with toxicity/target-span features, served via FastAPI and surfaced in a React UI. The system outputs discrete moderation actions (keep/warn/remove/temp_ban/perma_ban) with confidence, reasoning, and Q-value alternatives.
+An end-to-end content moderation stack that applies a DQN policy over DistilBERT embeddings with target-aware toxicity features, served via FastAPI and surfaced in a React UI. The system outputs discrete moderation actions (keep/warn/remove/temp_ban/perma_ban) with confidence, reasoning, and Q-value alternatives.
 
 ## Features
 
-- **Deep Q-Network (DQN)** agent with attention-based policy network
+- **Deep Q-Network (DQN)** agent with feedforward policy network
 - **Target-aware features** from a target span toxicity model (target presence + hate/offensive/normal probs)
-- **Multi-objective reward function** balancing toxicity reduction, false positives, and user retention
+- **Stance-aware moderation**: distinguishes anti-hate speech ("I hate nazis") from pro-hate speech ("I love nazis")
+- **Continuous alignment reward** with quadratic penalty for mismatched action severity
 - **Balanced sampling + reward shaping** to reduce toxic under-moderation
-- **Explainable AI**: attention weights, Q-value transparency, and natural language reasoning
+- **Explainable AI**: Q-value transparency and natural language reasoning
 - **Real-time moderation** via FastAPI backend
 - **Interactive React UI** with toxicity breakdown, alternative actions, and feedback loop
 - **Online feedback updates** logged to JSONL for incremental policy tuning
-- **Comprehensive training pipeline** with optional heads and data augmentation
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ An end-to-end content moderation stack that applies a DQN policy over DistilBERT
 - **RL Framework**: PyTorch + Gymnasium
 - **API**: FastAPI + Uvicorn
 - **NLP**: Transformers (DistilBERT), Detoxify
-- **Target span model**: DistilBERT + weak supervision
+- **Target span model**: DistilBERT + weak supervision + HateXplain data
 - **Data**: Pandas, NumPy
 
 ### Frontend
@@ -36,7 +36,9 @@ content-moderation-rl/
 |-- backend/
 |   |-- data/
 |   |   |-- train.csv                 # Your dataset (not tracked)
-|   |   |-- augment_stance.py         # Optional stance augmentation
+|   |   |-- dataset.json              # HateXplain dataset (20k posts)
+|   |   |-- augment_stance.py         # Counterfactual stance augmentation
+|   |   |-- download_stance_data.py   # Download external stance datasets
 |   |   |-- preprocess.py             # Embeddings + feature generation
 |   |   |-- target_lexicon.json       # Generated lexicon (optional)
 |   |   `-- feedback.jsonl            # Runtime feedback log
@@ -46,10 +48,9 @@ content-moderation-rl/
 |   |   |-- agents/
 |   |   |   `-- dqn_agent.py          # DQN agent + replay buffer
 |   |   |-- models/
-|   |   |   |-- policy_network.py     # Attention-based Q-network
+|   |   |   |-- policy_network.py     # Feedforward Q-network
 |   |   |   `-- target_span_model.py  # Target span toxicity model
 |   |   |-- train.py                  # DQN training loop
-|   |   |-- train_all.py              # Full training pipeline
 |   |   `-- train_target_span_model.py  # Target span model training
 |   |-- api/
 |   |   `-- app.py                    # FastAPI server
@@ -64,7 +65,7 @@ content-moderation-rl/
 |   |   `-- api.js
 |   |-- package.json
 |   `-- vite.config.js
-|-- run.py
+|-- run.py                            # Unified runner (train + serve)
 `-- README.md
 ```
 
@@ -81,9 +82,9 @@ content-moderation-rl/
 Place a CSV at `backend/data/train.csv` with a `comment_text` column and toxicity label columns
 (`toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`).
 
-Optional datasets for extra heads/target features (train_target_span_model.py will use any it finds):
-- `backend/data/archive/labeled_data.csv` (hate/offensive head)
-- `backend/data/dataset.json` (HateXplain)
+Optional datasets for target-aware training (train_target_span_model.py will use any it finds):
+- `backend/data/dataset.json` (HateXplain — primary target/stance dataset)
+- `backend/data/archive/labeled_data.csv` (hate/offensive labels)
 - `backend/data/Ethos_Dataset_Binary.csv`, `backend/data/Ethos_Dataset_Multi_Label.csv`
 - `backend/data/SBIC.v2.agg.trn.csv`
 - `backend/data/measuring_hate_speech.csv`
@@ -92,14 +93,11 @@ Optional datasets for extra heads/target features (train_target_span_model.py wi
 - `backend/data/archive2/test (1).csv` (HateCheck)
 - `backend/data/jigsaw-toxic-comment-classification-challenge/train.csv`
 
-Optional stance augmentation (adds anti-hate/anti-abuse statements):
+Optional stance augmentation (adds counterfactual anti-hate/pro-hate examples):
 
 ```bash
 python backend/data/augment_stance.py
 ```
-
-This writes `backend/data/stance_train.csv` and updates `backend/data/train.csv`
-(backup: `backend/data/train.csv.stance.bak`).
 
 ### 2. Backend Setup
 
@@ -111,33 +109,27 @@ pip install -r backend/requirements.txt
 python backend/data/preprocess.py
 ```
 
-Preprocessing generates `embeddings.npy` and `labels.npy`, and will also generate
-`hate_scores.npy`, `target_features.npy`, and `target_toxicity.npy` if the
-corresponding heads are present. If you train a head after preprocessing,
-rerun preprocessing to regenerate features.
+Preprocessing generates `embeddings.npy`, `labels.npy`, `target_features.npy`, and
+`target_toxicity.npy`. If you retrain the target span model, rerun preprocessing
+to regenerate features.
 
 ### 3. Train the Model
 
-Recommended one-shot pipeline (optional heads -> preprocess -> DQN):
+Recommended one-shot pipeline (target span model -> preprocess -> DQN -> stance check):
 
 ```bash
 python run.py train
 ```
 
-Note: `run.py train` trains the target span model only when `backend/data/archive/labeled_data.csv`
-is present. If you only have HateXplain or other target datasets, run
-`python backend/rl_training/train_target_span_model.py` before preprocessing.
-
-Or run the full pipeline directly:
-
-```bash
-python backend/rl_training/train_all.py
-```
+Useful flags:
+- `--force-target-span` — retrain target span model even if checkpoint exists
+- `--force-preprocess` — regenerate embeddings/features
+- `--allow-stance-fail` — continue even if stance polarity checks fail
+- `--download-stance-data` — download external CONAN stance data before training
 
 If you want to run stages manually:
 
 ```bash
-python backend/rl_training/train_hate_speech_head.py
 python backend/rl_training/train_target_span_model.py
 python backend/data/preprocess.py
 python backend/rl_training/train.py
@@ -188,28 +180,13 @@ Frontend will be available at `http://localhost:5173`
 5. Use the feedback buttons to rate decisions (Too lenient/Just right/Too harsh).
    Feedback is logged to `backend/data/feedback.jsonl` and can trigger online updates.
 
-## Example Comments
-
-Try these examples:
-
-| Comment | Expected Decision |
-|---------|------------------|
-| "This is a great article!" | Keep |
-| "You're an idiot" | Warn |
-| "I hate you all" | Remove |
-| "Kill yourself" | Temp Ban |
-| "Threatening violence against [group]" | Perma Ban |
-
 ## Architecture Details
 
 ### RL Environment
 
-**State Space** (790 dimensions):
-- Comment embedding: 768 dims (DistilBERT)
-- Hate/offensive scores: 3 dims
+**State Space** (772 dimensions):
+- Comment embedding: 768 dims (DistilBERT CLS token)
 - Target features: 4 dims (target_presence, hate_prob, offensive_prob, normal_prob)
-- User history: 10 dims (toxicity avg, warnings, bans, activity, etc.)
-- Platform metrics: 5 dims (health, satisfaction, false positive rate, etc.)
 
 **Action Space** (5 discrete actions):
 - 0: Keep
@@ -220,10 +197,10 @@ Try these examples:
 
 **Reward Function**:
 ```python
-reward = alignment
-       - over_penalty
-       - under_penalty
-       + platform_health_bonus
+diff = toxicity_score - action_severity
+reward = 1.0 - 2.0 * diff²
+if diff < 0:  # over-moderation penalty
+    reward -= 0.5 * |diff|
 ```
 
 When target features are available, the environment uses target-aware toxicity
@@ -231,23 +208,20 @@ When target features are available, the environment uses target-aware toxicity
 
 **Sampling**:
 - Toxic examples are oversampled during training (default `toxic_sample_prob=0.35`)
-- Toxicity threshold defaults to `0.6` when building toxic/non-toxic pools
 
 ### Policy Network
 
 ```
-Input (790) -> Comment Processor (768->256)
-            -> Context Processor (22->64)
-            -> Attention Layer
-            -> Q-Network -> Q-values (5)
+Input (772) -> Comment Processor (768->256)
+            -> Context Processor (4->64)
+            -> Q-Network (320->256->5)
 ```
 
-- **Attention layer** provides interpretability
-- Returns Q-values + attention weights
+Returns Q-values for each action.
 
 ### Training
 
-- **Algorithm**: Deep Q-Network (DQN)
+- **Algorithm**: Double DQN
 - **Experience Replay**: 100K capacity buffer
 - **Target Network**: Soft updates (tau=0.005)
 - **Exploration**: epsilon-greedy (1.0 -> 0.05)
@@ -328,72 +302,9 @@ Get training statistics.
 
 Get sample moderation examples.
 
-## Research Angles
-
-This project demonstrates several responsible AI concepts:
-
-1. **Reward Misspecification**: Train unconstrained agent -> observe over-moderation
-2. **Fairness Analysis**: Measure disparate impact across identity groups
-3. **Interpretability**: Attention weights + Q-value transparency + natural language explanations
-4. **Long-horizon Effects**: Simulate platform health over 1000+ steps
-
-## Training Metrics
-
-After training, you'll see:
-
-```
-Episode  990 | Reward:  125.34 | Loss: 0.0234 | Eps: 0.050 | Health: 0.89 | FP: 0.043
-
-Final Statistics:
-  Average reward (last 100): 123.45
-  Average loss (last 100): 0.0198
-  Final epsilon: 0.050
-  Final platform health: 0.89
-  Final false positive rate: 0.043
-```
-
-## Troubleshooting
-
-### Backend won't start
-
-**Error**: `No module named 'torch'`
-
-**Solution**: Install dependencies
-```bash
-pip install -r backend/requirements.txt
-```
-
-### Data not found
-
-**Error**: `Error: backend/data/train.csv not found`
-
-**Solution**: Place your dataset at `backend/data/train.csv` with a `comment_text` column
-and the toxicity label columns, then rerun preprocessing:
-```bash
-python backend/data/preprocess.py
-```
-
-### Frontend can't connect to backend
-
-**Error**: `Network Error` in browser console
-
-**Solution**: Ensure backend is running on port 8000
-```bash
-python backend/api/app.py
-```
-
-### Model not found warning
-
-**Warning**: `No trained model found. Using untrained agent.`
-
-**Solution**: Train the model first
-```bash
-python backend/rl_training/train.py
-```
-
 ## Performance Notes
 
-- **Data preprocessing**: ~30 minutes (50K comments)
+- **Data preprocessing**: ~30 minutes (600K comments)
 - **Training**: 2-4 hours on CPU (1000 episodes)
 - **Inference**: ~100ms per comment
 - **GPU support**: Uncomment torch-cuda in requirements.txt
@@ -401,11 +312,12 @@ python backend/rl_training/train.py
 ## Datasets Used
 
 - **Jigsaw/Conversation AI**: Toxic comment datasets
-- **Hugging Face**: Transformers library
-- **Detoxify**: Toxicity classification models
+- **HateXplain**: 20k posts with target annotations, rationale spans, and 3-class labels
+- **Ethos, SBIC, Measuring Hate Speech, HateCheck**: Optional supplementary datasets
+- **Hugging Face Transformers**: DistilBERT encoder
+- **Detoxify**: Toxicity classification
 - **Gymnasium**: RL environment framework
-- **HateXplain, Ethos, SBIC, Measuring Hate Speech, HateCheck**: Optional datasets used for target-aware training
 
 ---
 
-**Built with PyTorch, FastAPI, and React** 
+**Built with PyTorch, FastAPI, and React**

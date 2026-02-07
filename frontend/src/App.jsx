@@ -41,11 +41,11 @@ function App() {
             </div>
             <div>
               <h1 className="hero__title">Content Moderation System</h1>
-              <p className="hero__subtitle">DQN policy over contextual toxicity signals</p>
+              <p className="hero__subtitle">LLM for an automoderator with moderation actions</p>
             </div>
           </div>
           <p className="hero__lede">
-            Evaluate, explain, and refine moderation actions with realtime feedback.
+            Refine moderation actions with realtime feedback using reinforcement learning.
           </p>
         </header>
 

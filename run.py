@@ -22,16 +22,14 @@ SAVED_MODELS_DIR = BACKEND_DIR / "saved_models"
 
 HATE_DATA_PATH = ARCHIVE_DIR / "labeled_data.csv"
 TRAIN_DATA_PATH = DATA_DIR / "train.csv"
-HATE_HEAD_PATH = SAVED_MODELS_DIR / "hate_speech_head.pt"
 TARGET_SPAN_PATH = SAVED_MODELS_DIR / "target_span_model.pt"
 DQN_PATH = SAVED_MODELS_DIR / "dqn_final.pt"
+CONAN_STANCE_PATH = DATA_DIR / "Multitarget-CONAN.csv"
 
 EMBEDDINGS_PATH = DATA_DIR / "embeddings.npy"
 LABELS_PATH = DATA_DIR / "labels.npy"
-HATE_SCORES_PATH = DATA_DIR / "hate_scores.npy"
 TARGET_FEATURES_PATH = DATA_DIR / "target_features.npy"
 TARGET_TOXICITY_PATH = DATA_DIR / "target_toxicity.npy"
-
 
 def _ensure_backend_path():
     backend_str = str(BACKEND_DIR)
@@ -39,11 +37,117 @@ def _ensure_backend_path():
         sys.path.append(backend_str)
 
 
+def evaluate_policy_stance_pairs(min_action_gap=1):
+    """
+    Evaluate whether pro-extremist statements are moderated more harshly than anti-extremist statements.
+    Returns a list of failed pair records.
+    """
+    _ensure_backend_path()
+
+    import numpy as np
+    import torch
+    from transformers import DistilBertTokenizer, DistilBertModel
+
+    from rl_training.models.policy_network import PolicyNetwork
+    from rl_training.agents.dqn_agent import DQNAgent
+    from rl_training.models.target_span_model import TargetSpanToxicityModel
+    from rl_training.train_target_span_model import STANCE_POLARITY_PAIRS
+
+    if not DQN_PATH.exists():
+        raise FileNotFoundError(f"Missing trained DQN model at {DQN_PATH}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+    embedder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
+    embedder.eval()
+
+    target_span_model = None
+    if TARGET_SPAN_PATH.exists():
+        target_span_model = TargetSpanToxicityModel(num_tox_classes=3)
+        target_span_model.load_state_dict(torch.load(TARGET_SPAN_PATH, map_location=device))
+        target_span_model.to(device)
+        target_span_model.eval()
+
+    policy_network = PolicyNetwork()
+    target_network = PolicyNetwork()
+    agent = DQNAgent(policy_network=policy_network, target_network=target_network, device=device.type)
+    agent.load(DQN_PATH)
+    agent.policy_network.eval()
+    agent.target_network.eval()
+
+    action_names = {0: "keep", 1: "warn", 2: "remove", 3: "temp_ban", 4: "perma_ban"}
+
+    def embed_comment(text):
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=128,
+            padding="max_length"
+        ).to(device)
+        with torch.no_grad():
+            outputs = embedder(**inputs)
+        return outputs.last_hidden_state[:, 0, :].squeeze(0).cpu().numpy().astype(np.float32), inputs
+
+    def compute_target_features(inputs):
+        if target_span_model is None:
+            return np.zeros(4, dtype=np.float32)
+        with torch.no_grad():
+            outputs = target_span_model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"]
+            )
+            token_probs = torch.softmax(outputs["token_logits"], dim=-1)[..., 1]
+            token_probs = token_probs * inputs["attention_mask"]
+            tox_probs = torch.softmax(outputs["toxicity_logits"], dim=-1)[0]
+            target_presence = token_probs.max().item()
+            hate_prob = tox_probs[0].item()
+            offensive_prob = tox_probs[1].item()
+            normal_prob = tox_probs[2].item()
+        return np.array([target_presence, hate_prob, offensive_prob, normal_prob], dtype=np.float32)
+
+    def build_state(comment):
+        embedding, inputs = embed_comment(comment)
+        target_features = compute_target_features(inputs)
+        return np.concatenate([embedding, target_features]).astype(np.float32)
+
+    failures = []
+    print(f"Step 4: Policy stance polarity check (min_action_gap={min_action_gap})...")
+    for higher_text, lower_text in STANCE_POLARITY_PAIRS:
+        higher_state = build_state(higher_text)
+        lower_state = build_state(lower_text)
+        higher_action, higher_q = agent.select_action(higher_state, eval_mode=True)
+        lower_action, lower_q = agent.select_action(lower_state, eval_mode=True)
+        gap = int(higher_action) - int(lower_action)
+
+        print(
+            f"  '{higher_text}' -> {action_names[int(higher_action)]} ({int(higher_action)}) | "
+            f"'{lower_text}' -> {action_names[int(lower_action)]} ({int(lower_action)}) | "
+            f"gap={gap}"
+        )
+        if gap < min_action_gap:
+            failures.append({
+                "higher_text": higher_text,
+                "lower_text": lower_text,
+                "higher_action": int(higher_action),
+                "lower_action": int(lower_action),
+                "higher_q": np.asarray(higher_q).tolist(),
+                "lower_q": np.asarray(lower_q).tolist(),
+                "gap": gap,
+            })
+
+    return failures
+
+
 def train_pipeline(
     force_preprocess=False,
     skip_existing=False,
-    force_hate_head=False,
-    force_target_span=False
+    force_target_span=False,
+    allow_stance_fail=False,
+    stance_min_margin=0.05,
+    policy_stance_gap=1,
+    download_stance_data=False,
+    force_download_stance_data=False
 ):
     _ensure_backend_path()
 
@@ -51,36 +155,17 @@ def train_pipeline(
         print(f"Error: missing dataset at {TRAIN_DATA_PATH}")
         return False
 
-    trained_hate = False
-    trained_target = False
+    if download_stance_data:
+        print("Step 0: Downloading external stance data...")
+        from data.download_stance_data import CONAN_URL, download
+        download(CONAN_URL, CONAN_STANCE_PATH, force=force_download_stance_data)
 
-    # Step 1: Hate speech head (optional)
-    if HATE_DATA_PATH.exists():
-        if HATE_HEAD_PATH.exists() and not force_hate_head:
-            print("Step 1: Hate speech head already exists. Skipping.")
-        else:
-            print("Step 1: Training hate speech head...")
-            from rl_training.train_hate_speech_head import train as train_hate_head
-            args = SimpleNamespace(
-                epochs=3,
-                batch_size=64,
-                embed_batch_size=32,
-                max_length=128,
-                lr=1e-3,
-                seed=42,
-                val_ratio=0.1
-            )
-            train_hate_head(args)
-            trained_hate = True
-    else:
-        print("Step 1: Skipping hate speech head (dataset not found).")
-
-    # Step 2: Target span model (optional)
+    # Step 1: Target span model
     if HATE_DATA_PATH.exists():
         if TARGET_SPAN_PATH.exists() and not force_target_span:
-            print("Step 2: Target span model already exists. Skipping.")
+            print("Step 1: Target span model already exists. Skipping.")
         else:
-            print("Step 2: Training target span model...")
+            print("Step 1: Training target span model...")
             from rl_training.train_target_span_model import train as train_target_span
             args = SimpleNamespace(
                 epochs=5,
@@ -96,62 +181,70 @@ def train_pipeline(
                 min_lexicon_precision=0.6,
                 max_lexicon_terms=200,
                 ethos_threshold=0.5,
-                use_lexicon_cache=False
+                use_lexicon_cache=False,
+                stance_min_margin=stance_min_margin,
+                allow_stance_fail=allow_stance_fail
             )
             train_target_span(args)
-            trained_target = True
     else:
-        print("Step 2: Skipping target span model (dataset not found).")
+        print("Step 1: Skipping target span model (dataset not found).")
 
-    # Step 3: Preprocess embeddings + features
+    # Step 2: Preprocess embeddings + features
     required = [EMBEDDINGS_PATH, LABELS_PATH]
-    if HATE_HEAD_PATH.exists():
-        required.append(HATE_SCORES_PATH)
     if TARGET_SPAN_PATH.exists():
         required.append(TARGET_FEATURES_PATH)
         required.append(TARGET_TOXICITY_PATH)
 
-    needs_preprocess = force_preprocess or trained_hate or trained_target or not all(
+    needs_preprocess = force_preprocess or not all(
         path.exists() for path in required
     )
 
     if needs_preprocess:
-        print("Step 3: Preprocessing embeddings and features...")
+        print("Step 2: Preprocessing embeddings and features...")
         from data.preprocess import main as preprocess_main
         preprocess_main()
     else:
-        print("Step 3: Preprocessing already complete. Skipping.")
+        print("Step 2: Preprocessing already complete. Skipping.")
 
     if not EMBEDDINGS_PATH.exists() or not LABELS_PATH.exists():
         print("Error: embeddings or labels missing after preprocessing.")
         return False
 
-    # Step 4: Train DQN agent
+    # Step 3: Train DQN agent
     if DQN_PATH.exists() and skip_existing:
-        print("Step 4: DQN model already exists. Skipping.")
-        return True
+        print("Step 3: DQN model already exists. Skipping.")
+    else:
+        print("Step 3: Training DQN agent...")
+        from rl_training.train import train as train_dqn
 
-    print("Step 4: Training DQN agent...")
-    from rl_training.train import train as train_dqn
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            device = "cpu"
 
-    try:
-        import torch
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        device = "cpu"
+        train_dqn(
+            embeddings_path=str(EMBEDDINGS_PATH),
+            labels_path=str(LABELS_PATH),
+            target_features_path=str(TARGET_FEATURES_PATH),
+            target_toxicity_path=str(TARGET_TOXICITY_PATH),
+            num_episodes=1000,
+            max_steps=500,
+            batch_size=128,
+            save_interval=100,
+            device=device
+        )
 
-    train_dqn(
-        embeddings_path=str(EMBEDDINGS_PATH),
-        labels_path=str(LABELS_PATH),
-        hate_scores_path=str(HATE_SCORES_PATH),
-        target_features_path=str(TARGET_FEATURES_PATH),
-        target_toxicity_path=str(TARGET_TOXICITY_PATH),
-        num_episodes=1000,
-        max_steps=500,
-        batch_size=128,
-        save_interval=100,
-        device=device
-    )
+    failures = evaluate_policy_stance_pairs(min_action_gap=policy_stance_gap)
+    if failures and not allow_stance_fail:
+        print("Error: policy stance polarity gate failed.")
+        for item in failures:
+            print(
+                f"  FAIL: '{item['higher_text']}' ({item['higher_action']}) vs "
+                f"'{item['lower_text']}' ({item['lower_action']}) gap={item['gap']}"
+            )
+        print("Pass --allow-stance-fail to bypass this gate.")
+        return False
 
     return True
 
@@ -208,11 +301,6 @@ def main():
         help="Regenerate embeddings/features even if they exist"
     )
     train_parser.add_argument(
-        "--force-hate-head",
-        action="store_true",
-        help="Retrain the hate speech head even if it exists"
-    )
-    train_parser.add_argument(
         "--force-target-span",
         action="store_true",
         help="Retrain the target span model even if it exists"
@@ -221,6 +309,33 @@ def main():
         "--skip-existing",
         action="store_true",
         help="Skip DQN training if dqn_final.pt already exists"
+    )
+    train_parser.add_argument(
+        "--allow-stance-fail",
+        action="store_true",
+        help="Allow training to continue even if stance polarity checks fail"
+    )
+    train_parser.add_argument(
+        "--stance-min-margin",
+        type=float,
+        default=0.05,
+        help="Minimum toxicity-score margin for target-span stance polarity checks"
+    )
+    train_parser.add_argument(
+        "--policy-stance-gap",
+        type=int,
+        default=1,
+        help="Minimum action-severity gap required for policy stance pair checks"
+    )
+    train_parser.add_argument(
+        "--download-stance-data",
+        action="store_true",
+        help="Download external CONAN stance data before training"
+    )
+    train_parser.add_argument(
+        "--force-download-stance-data",
+        action="store_true",
+        help="Force re-download of external CONAN stance data"
     )
 
     serve_parser = subparsers.add_parser("serve", help="Start backend and frontend")
@@ -236,8 +351,12 @@ def main():
         ok = train_pipeline(
             force_preprocess=args.force_preprocess,
             skip_existing=args.skip_existing,
-            force_hate_head=args.force_hate_head,
-            force_target_span=args.force_target_span
+            force_target_span=args.force_target_span,
+            allow_stance_fail=args.allow_stance_fail,
+            stance_min_margin=args.stance_min_margin,
+            policy_stance_gap=args.policy_stance_gap,
+            download_stance_data=args.download_stance_data,
+            force_download_stance_data=args.force_download_stance_data
         )
         return 0 if ok else 1
 

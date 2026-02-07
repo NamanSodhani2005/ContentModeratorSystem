@@ -66,18 +66,17 @@ class DQNAgent:
 
 
     def select_action(self, state, eval_mode=False):
-        if not eval_mode and random.random() < self.epsilon:
-            action = np.random.randint(0, 5)
-            with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-                q_values, attention_weights = self.policy_network(state_tensor)
-            return action, q_values.cpu().numpy()[0], attention_weights.cpu().numpy()[0]
-
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values, attention_weights = self.policy_network(state_tensor)
-            action = torch.argmax(q_values, dim=-1).item()
-        return action, q_values.cpu().numpy()[0], attention_weights.cpu().numpy()[0]
+            q_values = self.policy_network(state_tensor)
+            q_np = q_values.cpu().numpy()[0]
+
+        if not eval_mode and random.random() < self.epsilon:
+            action = np.random.randint(0, 5)
+        else:
+            action = int(np.argmax(q_np))
+
+        return action, q_np
 
 
     def train_step(self, batch_size=128):
@@ -92,13 +91,13 @@ class DQNAgent:
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).to(self.device)
 
-        q_values, _ = self.policy_network(states)
+        q_values = self.policy_network(states)
         q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q_policy, _ = self.policy_network(next_states)
+            next_q_policy = self.policy_network(next_states)
             best_actions = next_q_policy.argmax(1, keepdim=True)
-            next_q_target, _ = self.target_network(next_states)
+            next_q_target = self.target_network(next_states)
             next_q = next_q_target.gather(1, best_actions).squeeze(1)
             targets = rewards + (1 - dones) * self.gamma * next_q
 

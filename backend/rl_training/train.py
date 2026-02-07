@@ -7,7 +7,6 @@ import sys
 import numpy as np
 import torch
 from pathlib import Path
-from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -16,11 +15,9 @@ from rl_training.models.policy_network import PolicyNetwork
 from rl_training.agents.dqn_agent import DQNAgent
 
 
-
 def train(
     embeddings_path='backend/data/embeddings.npy',
     labels_path='backend/data/labels.npy',
-    hate_scores_path='backend/data/hate_scores.npy',
     target_features_path='backend/data/target_features.npy',
     target_toxicity_path='backend/data/target_toxicity.npy',
     num_episodes=1000,
@@ -36,7 +33,6 @@ def train(
     print("\nLoading data...")
     embeddings = np.load(embeddings_path)
     labels = np.load(labels_path)
-    hate_scores = np.load(hate_scores_path) if os.path.exists(hate_scores_path) else None
     target_features = np.load(target_features_path) if os.path.exists(target_features_path) else None
     target_toxicity = np.load(target_toxicity_path) if os.path.exists(target_toxicity_path) else None
     print(f"Loaded {len(embeddings)} comments")
@@ -51,7 +47,6 @@ def train(
     env = ForumEnvironment(
         embeddings,
         labels,
-        hate_scores=hate_scores,
         target_features=target_features,
         target_toxicity=target_toxicity,
         max_steps=max_steps
@@ -61,8 +56,8 @@ def train(
     print(f"  Action space: {env.action_space.n}")
 
     print("\nInitializing neural networks...")
-    policy_network = PolicyNetwork(context_dim=22)
-    target_network = PolicyNetwork(context_dim=22)
+    policy_network = PolicyNetwork()
+    target_network = PolicyNetwork()
     print("Networks created")
     print(f"  Parameters: {sum(p.numel() for p in policy_network.parameters()):,}")
 
@@ -88,7 +83,6 @@ def train(
         'episode_lengths': [],
         'losses': [],
         'epsilon_values': [],
-        'platform_health': [],
         'false_positive_rates': []
     }
 
@@ -100,7 +94,7 @@ def train(
             episode_loss = []
 
             for step in range(max_steps):
-                action, q_values, attention = agent.select_action(state)
+                action, q_values = agent.select_action(state)
                 next_state, reward, done, truncated, info = env.step(action)
                 agent.replay_buffer.push(state, action, reward, next_state, done)
 
@@ -123,7 +117,6 @@ def train(
             training_stats['episode_lengths'].append(step + 1)
             training_stats['losses'].append(np.mean(episode_loss) if episode_loss else 0)
             training_stats['epsilon_values'].append(agent.epsilon)
-            training_stats['platform_health'].append(info['platform_health'])
             training_stats['false_positive_rates'].append(info['false_positive_rate'])
 
             if episode % 10 == 0:
@@ -133,7 +126,6 @@ def train(
                       f"Reward: {avg_reward:7.2f} | "
                       f"Loss: {avg_loss:.4f} | "
                       f"Eps: {agent.epsilon:.3f} | "
-                      f"Health: {info['platform_health']:.2f} | "
                       f"FP: {info['false_positive_rate']:.3f}")
 
             if episode % save_interval == 0 and episode > 0:
@@ -166,11 +158,9 @@ def train(
         print(f"  Average reward (last 100): {np.mean(training_stats['episode_rewards'][-100:]):.2f}")
         print(f"  Average loss (last 100): {np.mean(training_stats['losses'][-100:]):.4f}")
         print(f"  Final epsilon: {agent.epsilon:.3f}")
-        print(f"  Final platform health: {training_stats['platform_health'][-1]:.2f}")
         print(f"  Final false positive rate: {training_stats['false_positive_rates'][-1]:.3f}")
     else:
         print("\nNo completed episodes to summarize.")
-
 
 
 def main():

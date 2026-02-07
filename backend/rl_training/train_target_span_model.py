@@ -25,6 +25,7 @@ SBIC_PATH = Path("backend/data/SBIC.v2.agg.trn.csv")
 HATECHECK_PATH = Path("backend/data/archive2/test (1).csv")
 HATE_SPEECH_PATH = Path("backend/data/hate-speech-and-offensive-language.csv")
 HATE_SPEECH_ARCHIVE_PATH = Path("backend/data/archive/labeled_data.csv")
+CONAN_STANCE_PATH = Path("backend/data/Multitarget-CONAN.csv")
 JIGSAW_PATH = Path("backend/data/jigsaw-toxic-comment-classification-challenge/train.csv")
 JIGSAW_LOCAL_PATH = Path("backend/data/train.csv")
 ETHOS_MULTI_PATH = Path("backend/data/Ethos_Dataset_Multi_Label.csv")
@@ -52,16 +53,66 @@ JIGSAW_LABEL_COLS = [
     "identity_hate"
 ]
 
+STANCE_IDEOLOGY_TERMS = [
+    "nazism",
+    "nazis",
+    "neo-nazism",
+    "neo-nazis",
+    "fascism",
+    "fascists",
+    "white supremacy",
+    "white supremacists",
+    "the kkk",
+    "kkk",
+    "terrorist groups",
+    "extremist groups",
+]
+
+STANCE_ANTI_VERBS = [
+    "hate",
+    "despise",
+    "detest",
+    "reject",
+    "oppose",
+    "condemn",
+    "denounce",
+]
+
+STANCE_PRO_VERBS = [
+    "love",
+    "support",
+    "admire",
+    "praise",
+    "defend",
+    "hail",
+    "endorse",
+]
+
+STANCE_INTENSIFIERS = ["", "really", "absolutely", "truly", "strongly"]
+
+# Format: (should_be_more_toxic, should_be_less_toxic)
+STANCE_POLARITY_PAIRS = [
+    ("i love nazis", "i hate nazis"),
+    ("i support nazis", "i reject nazis"),
+    ("i praise fascism", "i oppose fascism"),
+    ("i admire white supremacy", "i condemn white supremacy"),
+    ("i defend the kkk", "i denounce the kkk"),
+    ("we support neo-nazis", "we oppose neo-nazis"),
+]
+
 
 
 def read_csv(path, sep=None):
     if not path.exists():
         return None
+    kwargs = {}
+    if sep is not None:
+        kwargs["sep"] = sep
     try:
-        return pd.read_csv(path, sep=sep)
+        return pd.read_csv(path, **kwargs)
     except Exception:
         try:
-            return pd.read_csv(path, sep=sep, engine="python", on_bad_lines="skip")
+            return pd.read_csv(path, engine="python", on_bad_lines="skip", **kwargs)
         except Exception:
             return None
 
@@ -146,6 +197,29 @@ def load_hate_speech_dataset(path):
     labels = (df["class"] != 2).astype(int).tolist()
     return texts, labels
 
+
+
+def load_conan_stance_dataset(path):
+    df = read_csv(path)
+    if df is None:
+        return [], []
+    if "HATE_SPEECH" not in df.columns or "COUNTER_NARRATIVE" not in df.columns:
+        return [], []
+
+    texts = []
+    labels = []
+
+    # Pro-hate content should be treated as hate/offensive.
+    for text in df["HATE_SPEECH"].fillna("").astype(str).tolist():
+        texts.append(text)
+        labels.append(0)
+
+    # Counter-narratives should be treated as non-toxic.
+    for text in df["COUNTER_NARRATIVE"].fillna("").astype(str).tolist():
+        texts.append(text)
+        labels.append(2)
+
+    return texts, labels
 
 
 def load_jigsaw_dataset(path):
@@ -561,6 +635,151 @@ def generate_weak_token_labels(text, tokenizer, lexicon, max_ngram, max_length=1
 
 
 
+def build_counterfactual_stance_examples():
+    texts = []
+    labels = []
+
+    anti_templates = [
+        "i {verb} {target}",
+        "i {intens} {verb} {target}",
+        "we {verb} {target}",
+        "we {intens} {verb} {target}",
+    ]
+    pro_templates = [
+        "i {verb} {target}",
+        "i {intens} {verb} {target}",
+        "we {verb} {target}",
+        "we {intens} {verb} {target}",
+    ]
+
+    for target in STANCE_IDEOLOGY_TERMS:
+        for template in anti_templates:
+            if "{intens}" in template:
+                for verb in STANCE_ANTI_VERBS:
+                    for intens in STANCE_INTENSIFIERS:
+                        text = " ".join(template.format(verb=verb, target=target, intens=intens).split())
+                        texts.append(text)
+                        labels.append(2)
+            else:
+                for verb in STANCE_ANTI_VERBS:
+                    text = " ".join(template.format(verb=verb, target=target).split())
+                    texts.append(text)
+                    labels.append(2)
+
+        for template in pro_templates:
+            if "{intens}" in template:
+                for verb in STANCE_PRO_VERBS:
+                    for intens in STANCE_INTENSIFIERS:
+                        text = " ".join(template.format(verb=verb, target=target, intens=intens).split())
+                        texts.append(text)
+                        labels.append(0)
+            else:
+                for verb in STANCE_PRO_VERBS:
+                    text = " ".join(template.format(verb=verb, target=target).split())
+                    texts.append(text)
+                    labels.append(0)
+
+    for high_text, low_text in STANCE_POLARITY_PAIRS:
+        texts.append(high_text)
+        labels.append(0)
+        texts.append(low_text)
+        labels.append(2)
+
+    dedup = {}
+    dedup_labels = {}
+    for text, label in zip(texts, labels):
+        key = normalize_text(text)
+        if not key:
+            continue
+        if key not in dedup or label < dedup_labels[key]:
+            dedup[key] = text
+            dedup_labels[key] = label
+
+    final_texts = [dedup[key] for key in dedup]
+    final_labels = [dedup_labels[key] for key in dedup]
+    return final_texts, final_labels
+
+
+
+def generate_keyword_token_labels(text, tokenizer, keywords, max_length=128):
+    encoding = tokenizer(
+        text,
+        padding="max_length",
+        truncation=True,
+        max_length=max_length,
+        return_offsets_mapping=True
+    )
+    offsets = encoding["offset_mapping"]
+    labels = [-100] * max_length
+
+    text_l = text.lower()
+    spans = []
+    for keyword in keywords:
+        key_l = keyword.lower()
+        start = 0
+        while True:
+            idx = text_l.find(key_l, start)
+            if idx == -1:
+                break
+            end = idx + len(key_l)
+            before_ok = idx == 0 or not text_l[idx - 1].isalnum()
+            after_ok = end == len(text_l) or not text_l[end].isalnum()
+            if before_ok and after_ok:
+                spans.append((idx, end))
+            start = idx + 1
+
+    for i, (start, end) in enumerate(offsets):
+        if start == end:
+            continue
+        labels[i] = 0
+        for span_start, span_end in spans:
+            if start < span_end and end > span_start:
+                labels[i] = 1
+                break
+
+    return labels
+
+
+
+def score_text_toxicity(model, tokenizer, text, device, num_tox_classes):
+    encoding = tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+    input_ids = encoding["input_ids"].to(device)
+    attention_mask = encoding["attention_mask"].to(device)
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        tox_probs = torch.softmax(outputs["toxicity_logits"], dim=-1)[0]
+        if num_tox_classes == 3:
+            hate_p = tox_probs[0].item()
+            off_p = tox_probs[1].item()
+            score = hate_p + 0.5 * off_p
+        else:
+            score = tox_probs[1].item()
+    return float(score)
+
+
+
+def evaluate_stance_pairs(model, tokenizer, device, num_tox_classes, min_margin=0.05):
+    results = []
+    failures = []
+    for high_text, low_text in STANCE_POLARITY_PAIRS:
+        high_score = score_text_toxicity(model, tokenizer, high_text, device, num_tox_classes)
+        low_score = score_text_toxicity(model, tokenizer, low_text, device, num_tox_classes)
+        margin = high_score - low_score
+        item = {
+            "higher_text": high_text,
+            "lower_text": low_text,
+            "higher_score": high_score,
+            "lower_score": low_score,
+            "margin": margin,
+            "passed": margin >= min_margin,
+        }
+        results.append(item)
+        if not item["passed"]:
+            failures.append(item)
+    return results, failures
+
+
+
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -634,9 +853,33 @@ def train(args):
             added += 1
         return added
 
+    def add_counterfactual_3class(new_texts, new_labels_3class):
+        """Add counterfactual 3-class samples with explicit ideology token spans."""
+        added = 0
+        for raw_text, label in zip(new_texts, new_labels_3class):
+            text = clean_text(raw_text)
+            if len(text.split()) < 3:
+                continue
+            key = normalize_text(text)
+            if not key or key in seen:
+                continue
+            seen[key] = len(texts)
+            texts.append(text)
+            toxicity_labels.append(label)
+            tok_labels = generate_keyword_token_labels(
+                text,
+                tokenizer,
+                STANCE_IDEOLOGY_TERMS,
+                max_length=args.max_length
+            )
+            all_token_labels.append(tok_labels)
+            added += 1
+        return added
+
 
     hate_texts, hate_labels = load_hate_speech_dataset(HATE_SPEECH_PATH)
     archive_texts, archive_labels = load_hate_speech_dataset(HATE_SPEECH_ARCHIVE_PATH)
+    conan_texts, conan_labels = load_conan_stance_dataset(CONAN_STANCE_PATH)
     ethos_multi_texts, ethos_multi_labels, ethos_groups = load_ethos_multi(
         ETHOS_MULTI_PATH, getattr(args, "ethos_threshold", 0.5)
     )
@@ -648,7 +891,7 @@ def train(args):
 
     comment_texts = load_comments_texts(COMMENTS_PATH)
     hatecheck_texts_flat = [t for items in hatecheck_groups.values() for t in items]
-    all_supp_texts = hate_texts + archive_texts + en_texts
+    all_supp_texts = hate_texts + archive_texts + conan_texts + en_texts
     lexicon_texts = all_supp_texts + comment_texts + hatecheck_texts_flat
 
     if getattr(args, "use_lexicon_cache", False) and LEXICON_PATH.exists():
@@ -691,6 +934,11 @@ def train(args):
     sbic_texts, sbic_labels = load_sbic(SBIC_PATH)
     n = add_supplementary_3class(sbic_texts, sbic_labels)
     print(f"Added {n} supplementary from SBIC")
+    n = add_supplementary_3class(conan_texts, conan_labels)
+    print(f"Added {n} supplementary from CONAN stance dataset")
+    cf_texts, cf_labels = build_counterfactual_stance_examples()
+    n = add_counterfactual_3class(cf_texts, cf_labels)
+    print(f"Added {n} counterfactual stance samples")
 
     if not texts:
         raise ValueError("No training data found")
@@ -819,11 +1067,6 @@ def train(args):
     if best_state is None:
         best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    torch.save(model.state_dict(), MODEL_PATH)
-    if interrupted:
-        print(f"Saved best model so far to {MODEL_PATH}")
-    else:
-        print(f"\nSaved best model (val_loss={best_val_loss:.4f}) to {MODEL_PATH}")
 
     print("\nTesting on key examples:")
     test_examples = [
@@ -852,6 +1095,40 @@ def train(args):
                 toxic_prob = tox_probs[0, 1].item()
                 print(f"  '{text}' -> toxic_prob={toxic_prob:.3f}")
 
+    stance_min_margin = getattr(args, "stance_min_margin", 0.05)
+    allow_stance_fail = getattr(args, "allow_stance_fail", False)
+    print(f"\nStance polarity evaluation (min_margin={stance_min_margin:.3f}):")
+    results, failures = evaluate_stance_pairs(
+        model,
+        tokenizer,
+        device,
+        num_tox_classes,
+        min_margin=stance_min_margin
+    )
+    for item in results:
+        status = "PASS" if item["passed"] else "FAIL"
+        print(
+            f"  [{status}] '{item['higher_text']}' ({item['higher_score']:.3f}) > "
+            f"'{item['lower_text']}' ({item['lower_score']:.3f}) "
+            f"margin={item['margin']:.3f}"
+        )
+
+    if failures and not allow_stance_fail:
+        summary = "; ".join(
+            f"'{f['higher_text']}' vs '{f['lower_text']}' (margin={f['margin']:.3f})"
+            for f in failures
+        )
+        raise RuntimeError(
+            "Stance polarity gate failed. Set --allow-stance-fail to bypass. "
+            f"Failures: {summary}"
+        )
+
+    torch.save(model.state_dict(), MODEL_PATH)
+    if interrupted:
+        print(f"Saved best model so far to {MODEL_PATH}")
+    else:
+        print(f"\nSaved best model (val_loss={best_val_loss:.4f}) to {MODEL_PATH}")
+
 
 
 def parse_args():
@@ -870,6 +1147,8 @@ def parse_args():
     parser.add_argument("--use-lexicon-cache", action="store_true")
     parser.add_argument("--num-tox-classes", type=int, default=3)
     parser.add_argument("--hatexplain-path", type=str, default=str(HATEXPLAIN_PATH))
+    parser.add_argument("--stance-min-margin", type=float, default=0.05)
+    parser.add_argument("--allow-stance-fail", action="store_true")
     return parser.parse_args()
 
 

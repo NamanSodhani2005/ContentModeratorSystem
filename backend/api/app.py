@@ -19,7 +19,6 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from rl_training.models.policy_network import PolicyNetwork
 from rl_training.agents.dqn_agent import DQNAgent
-from rl_training.models.hate_speech_head import HateSpeechHead
 from rl_training.models.target_span_model import TargetSpanToxicityModel
 
 app = FastAPI(title="Content Moderation API", version="1.0.0")
@@ -37,14 +36,12 @@ agent = None
 tokenizer = None
 embedder = None
 detoxify_model = None
-hate_speech_head = None
 target_span_model = None
 embedding_device = None
 feedback_count = 0
 
 ACTION_NAMES = {0: "keep", 1: "warn", 2: "remove", 3: "temp_ban", 4: "perma_ban"}
 ACTION_IDS = {v: k for k, v in ACTION_NAMES.items()}
-ACTION_COLORS = {"keep": "green", "warn": "yellow", "remove": "orange", "temp_ban": "red", "perma_ban": "darkred"}
 FEEDBACK_REWARDS = {"good": 1.0, "bad": -1.0, "too_harsh": -1.0, "too_soft": -1.0}
 
 # Feedback tuning
@@ -75,7 +72,7 @@ class FeedbackRequest(BaseModel):
 @app.on_event("startup")
 async def load_models():
     """Load all models on startup."""
-    global agent, tokenizer, embedder, detoxify_model, embedding_device, hate_speech_head, target_span_model
+    global agent, tokenizer, embedder, detoxify_model, embedding_device, target_span_model
 
     print("Loading models...")
 
@@ -86,14 +83,6 @@ async def load_models():
     embedder = DistilBertModel.from_pretrained('distilbert-base-uncased')
     embedder.to(device)
     embedder.eval()
-
-    hate_head_path = Path('backend/saved_models/hate_speech_head.pt')
-    if hate_head_path.exists():
-        hate_speech_head = HateSpeechHead()
-        hate_speech_head.load_state_dict(torch.load(hate_head_path, map_location=device))
-        hate_speech_head.to(device)
-        hate_speech_head.eval()
-        print("  [OK] Loaded hate speech head")
 
     target_span_path = Path('backend/saved_models/target_span_model.pt')
     if target_span_path.exists():
@@ -108,8 +97,8 @@ async def load_models():
 
     print("  Loading DQN agent...")
     agent_device = device.type
-    policy_network = PolicyNetwork(context_dim=22)
-    target_network = PolicyNetwork(context_dim=22)
+    policy_network = PolicyNetwork()
+    target_network = PolicyNetwork()
 
     agent = DQNAgent(
         policy_network=policy_network,
@@ -123,7 +112,7 @@ async def load_models():
         print(f"  [OK] Loaded trained model from {model_path}")
     else:
         print("  [WARN] No trained model found. Using untrained agent.")
-        print("    Train model first: python backend/rl_training/train.py")
+        print("    Train model first: python run.py train")
 
     agent.policy_network.eval()
     agent.target_network.eval()
@@ -145,24 +134,16 @@ def embed_comment(comment_text):
         outputs = embedder(**inputs)
         embedding = outputs.last_hidden_state[:, 0, :].squeeze().cpu().numpy()
 
-    return embedding
+    return embedding, inputs
 
 
-def compute_target_features(comment_text):
+def compute_target_features(inputs):
     """
     Compute target detection features using TargetSpanToxicityModel.
     Returns: [target_presence, hate_prob, offensive_prob, normal_prob] (4-dim)
     """
     if target_span_model is None:
         return np.zeros(4, dtype=np.float32)
-
-    inputs = tokenizer(
-        comment_text,
-        return_tensors='pt',
-        truncation=True,
-        max_length=128,
-        padding='max_length'
-    ).to(embedding_device)
 
     with torch.no_grad():
         outputs = target_span_model(
@@ -188,57 +169,23 @@ def compute_target_features(comment_text):
     return np.array([target_presence, hate_prob, offensive_prob, normal_prob], dtype=np.float32)
 
 
-def construct_state(comment_embedding, comment_text):
+def construct_state(comment_text):
     """
-    Construct state vector from comment embedding and text.
-    [comment_embedding(768), hate_scores(3), target_features(4), user_history(10), platform_metrics(5)]
+    Construct state vector from comment text.
+    [comment_embedding(768), target_features(4)]
     """
-    # user_history order: avg_toxicity, warnings_received, removals, temp_bans, perma_bans,
-    # activity_level, engagement_score, appeal_count, days_active, posts_count
-    user_history = np.array([
-        0.2,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.8,
-        0.0,
-        10.0,
-        5.0
-    ])
-
-    # platform_metrics order: platform_health, user_satisfaction, false_positive_rate, moderation_rate, time_step_norm
-    platform_metrics = np.array([
-        0.85,
-        0.80,
-        0.05,
-        0.15,
-        0.5
-    ])
-
-    hate_scores = np.zeros(3, dtype=np.float32)
-    if hate_speech_head is not None:
-        with torch.no_grad():
-            embed_tensor = torch.tensor(comment_embedding, dtype=torch.float32, device=embedding_device).unsqueeze(0)
-            logits = hate_speech_head(embed_tensor)
-            probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
-            hate_scores = probs.astype(np.float32)
-
-    target_features = compute_target_features(comment_text)
+    embedding, inputs = embed_comment(comment_text)
+    target_features = compute_target_features(inputs)
 
     state = np.concatenate([
-        comment_embedding,
-        hate_scores,
+        embedding,
         target_features,
-        user_history,
-        platform_metrics
     ]).astype(np.float32)
 
     return state
 
 
-def generate_explanation(comment, action, q_values, toxicity_scores, override_reason=None):
+def generate_explanation(comment, action, q_values, toxicity_scores):
     """Generate natural language explanation for moderation decision."""
     action_name = ACTION_NAMES[action]
     reasoning_parts = []
@@ -268,17 +215,13 @@ def generate_explanation(comment, action, q_values, toxicity_scores, override_re
     elif action_name == "perma_ban":
         reasoning_parts.append("Extreme violation - permanent ban")
 
-    if override_reason:
-        reasoning_parts.append(override_reason)
-
-    if not override_reason:
-        q_diff = q_values[action] - np.sort(q_values)[-2]
-        if q_diff > 1.0:
-            reasoning_parts.append("High confidence decision")
-        elif q_diff > 0.5:
-            reasoning_parts.append("Moderate confidence")
-        else:
-            reasoning_parts.append("Low confidence - borderline case")
+    q_diff = q_values[action] - np.sort(q_values)[-2]
+    if q_diff > 1.0:
+        reasoning_parts.append("High confidence decision")
+    elif q_diff > 0.5:
+        reasoning_parts.append("Moderate confidence")
+    else:
+        reasoning_parts.append("Low confidence - borderline case")
 
     return ". ".join(reasoning_parts) + "."
 
@@ -306,11 +249,10 @@ async def moderate_comment(request: ModerationRequest):
         if not comment:
             raise HTTPException(status_code=400, detail="Comment cannot be empty")
 
-        comment_embedding = embed_comment(comment)
-        state = construct_state(comment_embedding, comment)
-        action, q_values, attention_weights = agent.select_action(state, eval_mode=True)
+        state = construct_state(comment)
+        action, q_values = agent.select_action(state, eval_mode=True)
         toxicity_scores = detoxify_model.predict(comment) if detoxify_model else {}
-        reasoning = generate_explanation(comment, action, q_values, toxicity_scores, None)
+        reasoning = generate_explanation(comment, action, q_values, toxicity_scores)
 
         q_exp = np.exp(q_values - np.max(q_values))
         q_probs = q_exp / q_exp.sum()
@@ -359,8 +301,7 @@ async def submit_feedback(request: FeedbackRequest):
         if feedback not in FEEDBACK_REWARDS:
             raise HTTPException(status_code=400, detail="Invalid feedback")
 
-        comment_embedding = embed_comment(comment)
-        state = construct_state(comment_embedding, comment)
+        state = construct_state(comment)
 
         action = ACTION_IDS[decision]
         primary_reward = FEEDBACK_REWARDS[feedback]
@@ -368,7 +309,6 @@ async def submit_feedback(request: FeedbackRequest):
         done = True
 
         transitions = []
-        # Translate feedback into training transitions.
         if feedback == "good":
             transitions.append((action, 1.0))
         elif feedback == "bad":
@@ -449,7 +389,6 @@ async def get_metrics():
         "total_episodes": len(stats['episode_rewards']),
         "avg_reward": float(np.mean(stats['episode_rewards'][-100:])),
         "final_epsilon": float(stats['epsilon_values'][-1]),
-        "final_platform_health": float(stats['platform_health'][-1]),
         "final_false_positive_rate": float(stats['false_positive_rates'][-1])
     }
 
@@ -469,4 +408,3 @@ async def get_examples():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

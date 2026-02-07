@@ -12,13 +12,7 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).parent
 sys.path.append(str(DATA_DIR.parent))
-HATE_HEAD_PATH = DATA_DIR.parent / 'saved_models' / 'hate_speech_head.pt'
 TARGET_SPAN_PATH = DATA_DIR.parent / 'saved_models' / 'target_span_model.pt'
-
-try:
-    from rl_training.models.hate_speech_head import HateSpeechHead
-except Exception:
-    HateSpeechHead = None
 
 try:
     from rl_training.models.target_span_model import TargetSpanToxicityModel
@@ -75,7 +69,6 @@ def main(num_samples: int = None):
     output_path = DATA_DIR / 'embeddings.npy'
     labels_path = DATA_DIR / 'labels.npy'
     texts_path = DATA_DIR / 'comments.txt'
-    hate_scores_path = DATA_DIR / 'hate_scores.npy'
 
     np.save(output_path, embeddings)
     if labels is not None:
@@ -84,28 +77,6 @@ def main(num_samples: int = None):
     with open(texts_path, 'w', encoding='utf-8') as f:
         for comment in comments:
             f.write(comment.replace('\n', ' ') + '\n')
-
-    if HateSpeechHead is not None and HATE_HEAD_PATH.exists():
-        print("Generating hate speech scores...")
-        hate_head = HateSpeechHead()
-        hate_head.load_state_dict(torch.load(HATE_HEAD_PATH, map_location=device))
-        hate_head.to(device)
-        hate_head.eval()
-
-        hate_scores = []
-        batch_size = 256
-        for idx in tqdm(range(0, len(embeddings), batch_size), desc="Hate scores"):
-            batch = embeddings[idx:idx + batch_size]
-            with torch.no_grad():
-                batch_tensor = torch.tensor(batch, dtype=torch.float32, device=device)
-                logits = hate_head(batch_tensor)
-                probs = torch.softmax(logits, dim=-1).cpu().numpy()
-                hate_scores.append(probs)
-
-        hate_scores = np.vstack(hate_scores)
-        np.save(hate_scores_path, hate_scores)
-        print(f"  Hate scores shape: {hate_scores.shape}")
-        print(f"  Saved to: {hate_scores_path}")
 
     target_features_path = DATA_DIR / 'target_features.npy'
     target_toxicity_path = DATA_DIR / 'target_toxicity.npy'
@@ -160,7 +131,7 @@ def main(num_samples: int = None):
         print(f"  Target toxicity shape: {target_toxicity.shape}")
         print(f"  Saved to: {target_toxicity_path}")
 
-    print(f"\n✓ Preprocessing complete!")
+    print(f"\nPreprocessing complete!")
     print(f"  Embeddings shape: {embeddings.shape}")
     print(f"  Saved to: {output_path}")
     if labels is not None:
