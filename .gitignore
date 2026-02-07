@@ -87,3 +87,10 @@ Thumbs.db
 
 # Local AI tool configs
 .claude/
+.codex/
+.cursor/
+.aider*
+.windsurf/
+
+# Local model exports / archives
+*.tgz
